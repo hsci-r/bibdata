@@ -1,0 +1,32 @@
+[project]
+name = "bibdata"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "bib2>=1.5.4",
+    "click>=8.1",
+    "dagster>=1.10.14",
+    "fsspec>=2025.5.1",
+    "ipykernel>=6.29.5",
+    "pymarc>=5.3.1",
+    "s3fs>=2025.5.1",
+    "sickle>=0.7.0",
+    "tqdm>=4.67.1",
+]
+
+[dependency-groups]
+dev = [
+    "dagster-webserver",
+    "dagster-dg-cli[local]",
+]
+
+[tool.dg]
+directory_type = "project"
+
+[tool.dg.project]
+root_module = "dagster_assets"
+registry_modules = [
+    "dagster_assets.components.*",
+]

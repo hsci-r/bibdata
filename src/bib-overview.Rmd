@@ -1,0 +1,267 @@
+---
+params: 
+  dataset: ''
+  dataset_name: ''
+  field_descriptions: ''
+  subfield_descriptions: ''
+  out: ''
+  date_modified: ''
+  help: ''
+  min_year: 1000
+  max_year: 2050
+output:
+  html_document:
+    toc: yes
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1500px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+
+```{r setup, echo=F, warning=F, error=F, include=F}
+knitr::opts_chunk$set(echo=F, warning=F, error=F)
+#params=list(dataset_name= "ERB",dataset="../data/dnb/dnb.parquet",field_descriptions="../data/schema-info/pica_fields.tsv",subfield_descriptions="../data/schema-info/pica_subfields.tsv", min_year=1400,max_year=1800)
+library(tidyverse)
+library(gt)
+library(glue)
+library(gghsci)
+library(ggplot2)
+library(arrow)
+
+p <- function(number) {
+  return(scales::number(number, big.mark = ","))
+}
+pp <- function(percentage, accuracy = 0.01) {
+  return(scales::percent(percentage, accuracy = accuracy))
+}
+if (is.null(getOption("arrow_duck_con"))) {
+  options(
+    arrow_duck_con = DBI::dbConnect(
+      duckdb::duckdb(bigint = "integer64"),
+      bigint = "integer64",
+      dbdir = str_c(tempdir(), "/duckdb")
+    )
+  )
+}
+con <- getOption("arrow_duck_con")
+
+DBI::dbExecute(con, "SET preserve_insertion_order = false;")
+DBI::dbExecute(con, "SET memory_limit = '64GB';")
+
+dmtime <- if (params$date_modified!='') params$date_modified else strftime(fs::file_info(Sys.glob(params$dataset)[[1]])$modification_time,"%Y-%m-%d")
+d_a <- open_dataset(Sys.glob(params$dataset))
+d <- d_a |> to_duckdb()
+
+db_sample <- function(table, percent) {
+  tbl(con, sql(glue::glue("{dbplyr::sql_render(table)} USING SAMPLE {percent}%")))
+}
+
+field_descriptions <- if (params$field_descriptions!='') read_tsv(params$field_descriptions) else tibble(
+  field_code = character(),
+  field_description = character(),
+  url = character()
+)
+subfield_descriptions <- if (params$subfield_descriptions!='') read_tsv(params$subfield_descriptions) else tibble(
+  field_code = character(),
+  subfield_code = character(),
+  subfield_description = character()
+)
+
+n_records <- d |> distinct(record_number) |> count() |> pull() |> as.integer()
+```
+
+---
+title: Composition Analysis of the `r params$dataset_name` dated `r dmtime`
+---
+
+# Overall summary
+
+`r p(n_records)` records in total.
+
+## Temporal overview
+
+```{r temporal}
+p_years <- d |>
+  filter(field_code=="011@", subfield_code=="a") |>
+  filter(str_detect(value, "^\\d+$")) |>
+  mutate(year=as.integer(value)) |>
+  union_all(
+    d |> 
+      filter(field_code=="008") |> 
+      mutate(value=str_sub(value, 8, 11)) |> 
+      filter(str_detect(value, "^\\d+$")) |>
+      mutate(year=as.integer(value))
+  )
+
+p_years |>
+  count(year) |>
+  mutate(n=as.integer(n)) |>
+  filter(year>=params$min_year,year<=params$max_year) |>
+  ggplot(aes(x=year, y=n)) +
+  geom_step() +
+  theme_hsci_discrete() +
+  xlab("Year") +
+  ylab("Records (N)") +
+  scale_y_continuous(labels=p)
+```
+
+`r d |> distinct(record_number) |> anti_join(p_years, join_by(record_number)) |> count() |> pull() |> as.integer() |> p()` records do not have easily parseable dates between the years `r params$min_year` and `r params$max_year`.
+
+## Language overview
+
+```{r language}
+language_codes <- ISOcodes::ISO_639_2 |> select(language_code=Alpha_3_B, language=Name) |>
+  to_duckdb()
+
+p_languages <- d |>
+  filter(field_code=="010@", subfield_code=="a") |>
+  union_all(d |>
+    filter(field_code=="008") |>
+    mutate(value=str_sub(value, 36, 38))
+  ) |>
+  rename(language_code=value) |>
+  left_join(language_codes, join_by(language_code)) |>
+  transmute(record_number, language=if_else(is.na(language), language_code, str_c(language_code, " (", language, ")")))
+
+d |>
+  distinct(record_number) |>
+  left_join(p_languages, join_by(record_number)) |>
+  count(language) |>
+  mutate(n=as.integer(n), prop=n/sum(n)) |>
+  arrange(desc(n)) |>
+  gt(rowname_col='language') |>
+  cols_label(n="Records (N)", prop="Proportion (%)") |>
+  fmt_number(n, decimals = 0) |>
+  fmt_percent(prop)
+```
+
+# Field code usage overview
+
+```{r field_code_usage_overview_data}
+field_code_usage_stats <- d |>
+  group_by(field_code) |>
+  summarise(records = n_distinct(record_number), n = n(), .groups = "drop") |>
+  mutate(r_p=records/n_records) |> 
+  mutate(vals_per_rec = n / records) |>
+  collect() |>
+  left_join(
+    d |>
+      count(record_number, field_code) |>
+      filter(n > 1L) |>
+      ungroup() |>
+      count(field_code, name = "recs_with_mult_vals") |>
+      collect(),
+    join_by(field_code)
+  ) |>
+  arrange(field_code) |>
+  replace_na(list(recs_with_mult_vals = 0L)) |>
+  left_join(field_descriptions, join_by(field_code)) |>
+  mutate(across(where(bit64::is.integer64), as.integer))
+```
+
+In total, `r field_code_usage_stats |> count() |> pull(n) |> as.integer() |> p()` distinct fields are used.
+
+Legend for the table below:
+
+* `records`: how many records have at least one of this field
+* `r_p`: the above as a percentage of all records
+* `n`: the total number of appearances of this field
+* `vals_per_rec`: calculated from the above, the mean number of appearances of this field per record
+* `recs_with_mult_vals`: the number of records that have more than one repetition of this field
+
+```{r field_code_usage_overview_table}
+field_code_usage_stats |>
+  relocate(field_description, .after=field_code) |>
+  relocate(r_p, .after=records) |>
+  mutate(field_code = if_else(!is.na(url), glue('<a name="{field_code}" href="{url}">{field_code}</a>'), glue('<a name="{field_code}">{field_code}</a>'))) |>
+  select(-url) |>
+  gt() |>
+  fmt_number(where(is.numeric), decimals = 0) |>
+  fmt_percent(r_p, decimals = 2, drop_trailing_zeros = TRUE) |>
+  fmt_number(vals_per_rec, decimals = 2, drop_trailing_zeros = TRUE) |>
+  data_color(columns=r_p, palette="viridis") |>
+  data_color(columns=vals_per_rec, palette="viridis", method="quantile", quantiles=8) |>
+  fmt_passthrough(field_code, escape = FALSE)
+```
+
+# Field code usage overview by subfield
+
+```{r field_subfield_code_usage_overview_data}
+
+subfield_code_example_vals <- d |>
+  count(field_code, subfield_code, value) |>
+  group_by(field_code, subfield_code) |>
+  slice_sample(n = 7) |>
+  summarise(e_vals = str_flatten(str_c(value, ' (', n, ')'), collapse = "|"), .groups = "drop") |>
+#  union_all(subfield_code_example_vals) |>
+  collect()
+
+subfield_code_dist_vals <- d |>
+  group_by(field_code, subfield_code) |>
+  summarise(dist_vals=n_distinct(value), .groups="drop") |>
+  collect()
+
+subfield_code_usage_stats <- d |>
+  group_by(field_code, subfield_code) |>
+  summarise(records = n_distinct(record_number), n = n(), .groups = "drop") |>
+  mutate(r_p = records / n_records) |>
+  mutate(vals_per_rec = n / records) |>
+  collect() |>
+  left_join(
+    d |>
+      count(record_number, field_code, subfield_code) |>
+      filter(n > 1L) |>
+      ungroup() |>
+      count(field_code, subfield_code, name = "recs_with_mult_vals") |>
+      collect(),
+    join_by(field_code, subfield_code)
+  ) |>
+  replace_na(list(recs_with_mult_vals = 0)) |>
+  left_join(subfield_code_dist_vals, join_by(field_code, subfield_code)) |>
+  left_join(subfield_code_example_vals, join_by(field_code, subfield_code)) |>
+  left_join(subfield_descriptions, join_by(field_code, subfield_code)) |>
+  relocate(field_code, subfield_code, subfield_description, records, r_p, dist_vals, e_vals) |>
+  left_join(field_descriptions, join_by(field_code)) |>
+  arrange(field_code, subfield_code) |>
+  mutate(across(where(bit64::is.integer64), as.integer))
+
+rm(subfield_code_example_vals, subfield_code_dist_vals)
+```
+
+In total, `r subfield_code_usage_stats |> count() |> pull(n) |> as.integer() |> p()` distinct field+subfield combinations are used.
+
+Legend for the table below:
+
+* `records`: how many records have at least one of this field+subfield
+* `r_p`: the above as a percentage of all records
+* `dist_vals`: the number of different values appearing in this field+subfield
+* `e_vals`: at most seven random sample values of this field+subfield
+* `n`: the total number of appearances of this field+subfield
+* `vals_per_rec`: calculated from the above, the mean number of appearances of this field+subfield per record
+* `recs_with_mult_vals`: the number of records that have more than one repetition of this field+subfield
+
+```{r subfield_code_usage_overview_table}
+subfield_code_usage_stats |>
+  mutate(subfield_code = str_c('<a name="', field_code, "$", subfield_code, '"></a>', field_code, "$", subfield_code)) |>
+  mutate(group = glue("{url}|{field_code}: {field_description}")) |>
+  select(-c(url, field_code, field_description)) |>
+  gt(groupname_col = "group") |>
+  text_transform(locations = cells_row_groups(), fn =  function(group) {
+      urls = str_extract(group, "(.*?)\\|", group=1)
+      descrs = str_replace(group, ".*?\\|","")
+      map2(urls, descrs, \(url, description) if_else(url!="NA", html(glue('<a href="{url}">{description}</a>')), html(description))
+      )
+  }
+  ) |>
+  fmt_number(where(is.numeric), decimals = 0) |>
+  fmt_percent(r_p, decimals = 2, drop_trailing_zeros = TRUE) |>
+  fmt_number(vals_per_rec, decimals = 2, drop_trailing_zeros = TRUE) |>
+  data_color(columns=r_p, palette="viridis") |>
+  data_color(columns=vals_per_rec, palette="viridis", method="quantile", quantiles=8) |>
+  fmt_passthrough(subfield_code, escape=F)
+```

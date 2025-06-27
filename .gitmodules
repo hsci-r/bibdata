@@ -1,0 +1,12 @@
+[submodule "vd18"]
+	path = vd18
+	url = git@github.com:hsci-r/vd18-data
+[submodule "vd17"]
+	path = vd17
+	url = git@github.com:hsci-r/vd17-data
+[submodule "data/vd18"]
+	path = data/vd18
+	url = git@github.com:hsci-r/vd18-data
+[submodule "data/vd17"]
+	path = data/vd17
+	url = git@github.com:hsci-r/vd17-data

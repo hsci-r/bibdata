@@ -1,0 +1,11 @@
+dagster_state
+.DS_Store
+__pycache__
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+.history
+data/work
+data/estc/estc*.parquet
+data/hpb/hpb*.parquet

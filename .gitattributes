@@ -1,0 +1,2 @@
+data/** filter=lfs diff=lfs merge=lfs
+data/**/*.html filter=-lfs diff=-lfs merge=-lfs
