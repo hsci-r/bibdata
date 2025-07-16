@@ -33,6 +33,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           lfs: true
+      - name: Generate Directory Listings
+        uses: jayanta525/github-pages-directory-listing@v4.0.0
+        with:
+          FOLDER: data      #directory to generate index          
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Upload artifact
