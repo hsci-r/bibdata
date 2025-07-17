@@ -53,8 +53,10 @@ con <- getOption("arrow_duck_con")
 DBI::dbExecute(con, "SET preserve_insertion_order = false;")
 DBI::dbExecute(con, "SET memory_limit = '64GB';")
 
-dmtime <- if (params$date_modified!='') params$date_modified else strftime(fs::file_info(Sys.glob(params$dataset)[[1]])$modification_time,"%Y-%m-%d")
-d_a <- open_dataset(Sys.glob(params$dataset))
+files <- Sys.glob(params$dataset)
+dmtime <- if (params$date_modified!='') params$date_modified else strftime(fs::file_info(files[[1]])$modification_time,"%Y-%m-%d")
+
+d_a <- open_dataset(files)
 d <- d_a |> to_duckdb()
 
 db_sample <- function(table, percent) {
@@ -72,6 +74,15 @@ subfield_descriptions <- if (params$subfield_descriptions!='') read_tsv(params$s
   subfield_description = character()
 )
 
+unit_print <- function(n) {
+  return(case_when(
+    n < 1000 ~ paste0(n, "B"),
+    n < 1000000 ~ paste0(n / 1000, "KB"),
+    n < 1000000000 ~ paste0(n / 1000000, "MB"),
+    n < 1000000000000 ~ paste0(n / 1000000000, "GB"),
+    TRUE ~ paste0(n / 1000000000, "TB")))
+}
+
 n_records <- d |> distinct(record_number) |> count() |> pull() |> as.integer()
 ```
 
@@ -81,7 +92,17 @@ title: Composition Analysis of the `r params$dataset_name` dated `r dmtime`
 
 # Overall summary
 
-`r p(n_records)` records in total.
+`r p(n_records)` records and `r p(d |> count() |> pull() |> as.integer())` attribute values in total. Constituent files:
+
+```{r filelist, results = 'asis'}
+
+cat("\n\n")
+for (file in files[order(files |> str_replace(".parquet", ""))]) {
+  unit_size <- unit_print(fs::file_info(file)$size)
+  cat(glue::glue("- {file} ({unit_size})\n"))
+}
+cat("\n")
+```
 
 ## Temporal overview
 

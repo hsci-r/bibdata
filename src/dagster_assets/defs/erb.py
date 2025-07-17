@@ -1,7 +1,7 @@
 
 
 import dagster as dg
-from dagster_assets.utils import get_date_from_last_modified_file, log_and_run, create_overview, run_bibxml2
+from dagster_assets.utils import get_date_from_file_modification_time, log_and_run, create_overview, run_bibxml2
 
 work_file = "data/work/erb.mrcx.gz"
 parquet_file = "data/erb/erb.parquet"
@@ -25,7 +25,7 @@ def erb_overview(context: dg.AssetExecutionContext):
         context,
         name="Estonian National Bibliography",
         data_glob=parquet_file,
-        date_modified=get_date_from_last_modified_file(work_file),
+        date_modified=get_date_from_file_modification_time(work_file),
         fields_file="data/schema-info/marc_fields.tsv",
         subfields_file="data/schema-info/marc_subfields.tsv",
         output_file="data/erb/erb-overview.html"
