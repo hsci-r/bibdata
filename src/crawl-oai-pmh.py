@@ -5,7 +5,7 @@ from xml.etree import ElementTree
 
 import click
 import fsspec
-from lxml import etree
+from lxml import etree # pyright: ignore[reportAttributeAccessIssue]
 from requests import HTTPError
 from sickle import Sickle, OAIResponse, oaiexceptions
 from tqdm import tqdm

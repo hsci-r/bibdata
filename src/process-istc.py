@@ -1,24 +1,16 @@
+import os
+import duckdb
 import fsspec
 from tqdm.auto import tqdm
 import yaml
-from bibxml2 import schema
+from bib2 import schema, parquet_writer
 import pyarrow.parquet as pq
 import pyarrow as pa
 
-def parquet_writer(of, parquet_compression: str, parquet_compression_level: int) -> pq.ParquetWriter:
-    return pq.ParquetWriter(of, 
-            schema=schema, 
-            compression=parquet_compression, 
-            compression_level=parquet_compression_level,
-#            use_byte_stream_split=['record_number', 'field_number', 'subfield_number'], # type: ignore pyarrow import complains: BYTE_STREAM_SPLIT encoding is only supported for FLOAT or DOUBLE data
-            write_page_index=True, 
-            use_dictionary=['field_code', 'subfield_code'], # type: ignore
-            store_decimal_as_integer=True,
-            sorting_columns=[pq.SortingColumn(0), pq.SortingColumn(1), pq.SortingColumn(2)],
-        ) 
+
 
 def process_istc():
-    with open('data/work/istc_clean_1.0.yaml', 'r') as file, fsspec.open('data/istc/istc.parquet', 'wb') as parquet_file, parquet_writer(parquet_file, 'zstd', 22) as pw:
+    with open('data/work/istc_clean_1.0.yaml', 'r') as file, parquet_writer('data/istc/istc.tmp.parquet', 'zstd', None, False) as pw:
         batch = []
         data = yaml.safe_load_all(file)
         for record_number, item in enumerate(tqdm(data), start=1):
@@ -50,7 +42,9 @@ def process_istc():
                 else:
                     batch.append((record_number, field_number, 1, attribute, '', str(value)))
                     field_number += 1
-        pw.write_batch(pa.record_batch(list(zip(*batch)), schema=schema), row_group_size=64*1024*1024)
+        pw.write_batch(pa.record_batch(list(zip(*batch)), schema=schema), row_group_size=1024*1024)
+    duckdb.query(f"COPY 'data/istc/istc.tmp.parquet' TO 'data/istc/istc.parquet' (FORMAT 'parquet', COMPRESSION 'zstd', COMPRESSION_LEVEL 22)")
+    os.remove('data/istc/istc.tmp.parquet')
 
 if __name__ == "__main__":
     process_istc()

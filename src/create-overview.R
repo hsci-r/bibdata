@@ -1,5 +1,5 @@
 #!/usr/bin/env Rscript
-renv::install(repos = c(hsci='https://hsci-r.r-universe.dev', cloud='https://cloud.r-project.org'))
+#renv::install(repos = c(hsci='https://hsci-r.r-universe.dev', cloud='https://cloud.r-project.org'))
 #renv::snapshot(type="explicit")
 library(optparse)
 

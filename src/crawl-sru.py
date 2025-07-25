@@ -22,7 +22,11 @@ def get_session_with_retries(retries=5):
     retry = Retry(
         total=retries,
         read=retries,
-        connect=retries
+        connect=retries,
+        status=retries,
+        status_forcelist=[500, 502, 503, 504],
+        backoff_factor=0.1,
+        allowed_methods=["HEAD", "GET", "POST"]
     )
     adapter = HTTPAdapter(max_retries=retry)
     session.mount("http://", adapter)
@@ -58,8 +62,9 @@ def crawl_sru(endpoint: str, query: str, version: str, record_schema: str, outpu
         with gzip.open(output  + os.sep + f'{str(start)}.xml.gz', 'wb') as f:
             # logging.info(f"Processing batch {start} of {total_records}.")
             params['startRecord'] = start
-            c = session.get(endpoint, params=params).content
-            f.write(c)
+            response = session.get(endpoint, params=params)
+            response.raise_for_status()
+            f.write(response.content)
 
 
 if __name__ == '__main__':

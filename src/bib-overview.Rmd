@@ -25,7 +25,8 @@ output:
 
 ```{r setup, echo=F, warning=F, error=F, include=F}
 knitr::opts_chunk$set(echo=F, warning=F, error=F)
-#params=list(dataset_name= "ERB",dataset="../data/dnb/dnb.parquet",field_descriptions="../data/schema-info/pica_fields.tsv",subfield_descriptions="../data/schema-info/pica_subfields.tsv", min_year=1400,max_year=1800)
+#params=list(dataset_name= "ERB",dataset="../data/cnb/cnb.parquet",field_descriptions="../data/schema-info/pica_fields.tsv",subfield_descriptions="../data/schema-info/pica_subfields.tsv", min_year=1400,max_year=1800, date_modified='')
+start.time <- Sys.time()
 library(tidyverse)
 library(gt)
 library(glue)
@@ -80,7 +81,9 @@ unit_print <- function(n) {
     n < 1000000 ~ paste0(n / 1000, "KB"),
     n < 1000000000 ~ paste0(n / 1000000, "MB"),
     n < 1000000000000 ~ paste0(n / 1000000000, "GB"),
-    TRUE ~ paste0(n / 1000000000, "TB")))
+    n < 1000000000000000 ~ paste0(n / 1000000000000, "TB"),
+    n < 1000000000000000000 ~ paste0(n / 1000000000000000, "PB"),
+    TRUE ~ paste0(n / 1000000000000000000, "EB")))
 }
 
 n_records <- d |> distinct(record_number) |> count() |> pull() |> as.integer()
@@ -158,7 +161,8 @@ d |>
   gt(rowname_col='language') |>
   cols_label(n="Records (N)", prop="Proportion (%)") |>
   fmt_number(n, decimals = 0) |>
-  fmt_percent(prop)
+  fmt_percent(prop) |>
+  opt_interactive(use_search=TRUE, use_filters=FALSE, use_pagination = FALSE)
 ```
 
 # Field code usage overview
@@ -207,7 +211,8 @@ field_code_usage_stats |>
   fmt_number(vals_per_rec, decimals = 2, drop_trailing_zeros = TRUE) |>
   data_color(columns=r_p, palette="viridis") |>
   data_color(columns=vals_per_rec, palette="viridis", method="quantile", quantiles=8) |>
-  fmt_passthrough(field_code, escape = FALSE)
+  fmt_passthrough(field_code, escape = FALSE) |>
+  opt_interactive(use_search=TRUE, use_filters=FALSE, use_pagination = FALSE)
 ```
 
 # Field code usage overview by subfield
@@ -271,6 +276,7 @@ subfield_code_usage_stats |>
   mutate(subfield_code = str_c('<a name="', field_code, "$", subfield_code, '"></a>', field_code, "$", subfield_code)) |>
   mutate(group = glue("{url}|{field_code}: {field_description}")) |>
   select(-c(url, field_code, field_description)) |>
+  #gt() |>
   gt(groupname_col = "group") |>
   text_transform(locations = cells_row_groups(), fn =  function(group) {
       urls = str_extract(group, "(.*?)\\|", group=1)
@@ -284,5 +290,13 @@ subfield_code_usage_stats |>
   fmt_number(vals_per_rec, decimals = 2, drop_trailing_zeros = TRUE) |>
   data_color(columns=r_p, palette="viridis") |>
   data_color(columns=vals_per_rec, palette="viridis", method="quantile", quantiles=8) |>
-  fmt_passthrough(subfield_code, escape=F)
+  fmt_passthrough(subfield_code, escape=F) #|>
+  #opt_interactive(use_search=TRUE, use_filters=FALSE, use_pagination = FALSE)
 ```
+
+```{r time_taken}
+end.time <- Sys.time()
+time.taken <- end.time - start.time
+#time.taken
+```
+

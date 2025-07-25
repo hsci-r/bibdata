@@ -24,11 +24,12 @@ def run_bibxml2(
     output_file: str,
     input_files: str,
     fmt: str,
+    max_rows_per_file: int = 500_000_000,
     no_input_glob: bool = False,
 ) -> dg.MaterializeResult:
     for path in glob.glob(output_file.replace(".parquet","*.parquet")):
         os.remove(path)
-    cmd = f"bib2 -f {fmt} -o {output_file} {' '.join(glob.glob(input_files)) if not no_input_glob else input_files}"
+    cmd = f"bib2 -f {fmt} -o {output_file} -pmrpf {max_rows_per_file} -ps -pd {' '.join(glob.glob(input_files)) if not no_input_glob else input_files}"
     log_and_run(cmd, context)
     return get_parquet_glob_sha1sum(output_file)
 
