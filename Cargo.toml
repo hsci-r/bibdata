@@ -22,7 +22,7 @@ duckdb = { version = "1.3.2", features = ["bundled"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
 
 # Concurrency utilities
-dashmap = "5"
+dashmap = "6"
 
 [features]
 default = []

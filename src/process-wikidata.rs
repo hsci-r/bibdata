@@ -25,6 +25,7 @@ const URI_PREFIX: &str = "http://www.wikidata.org/entity/";
 const READY_BATCHES_BUFFER: usize = 2;
 const LINE_CHANNEL_CAPACITY: usize = 5_000;
 const DEFAULT_BATCH_SIZE: usize = 122_880;
+const DEFAULT_MAX_FILE_SIZE: u64 = 4_000_000_000;
 
 // Small helpers for clarity
 #[inline]
@@ -187,6 +188,9 @@ struct Args {
     /// Number of concurrent parse workers (default: number of CPUs)
     #[arg(short = 't', long)]
     parse_threads: Option<usize>,
+    /// Maximum final parquet file size in bytes
+    #[arg(short = 's', long, default_value_t = DEFAULT_MAX_FILE_SIZE)]
+    max_file_size: u64,
 }
 
 // Arrow schemas
@@ -2015,12 +2019,12 @@ async fn main() -> Result<()> {
         t.await??;
     }
 
-    finalize_output_parallel(&args.output).await?;
+    finalize_output_parallel(&args.output, args.max_file_size).await?;
 
     Ok(())
 }
 
-async fn finalize_output_parallel(out_root: &Path) -> Result<()> {
+async fn finalize_output_parallel(out_root: &Path, max_file_size: u64) -> Result<()> {
     let datasets = vec![
         "entities",
         "labels",
@@ -2072,9 +2076,10 @@ async fn finalize_output_parallel(out_root: &Path) -> Result<()> {
                 "SET enable_progress_bar_print=TRUE; SET progress_bar_time=0; SET threads=1;",
             )?;
             let sql = format!(
-                "COPY (SELECT * FROM parquet_scan('{}')) TO '{}' (FORMAT 'parquet', COMPRESSION 'zstd', COMPRESSION_LEVEL 22, STRING_DICTIONARY_PAGE_SIZE_LIMIT 100_000, FILE_SIZE_BYTES 4_000_000_000)",
+                "COPY (SELECT * FROM parquet_scan('{}')) TO '{}' (FORMAT 'parquet', COMPRESSION 'zstd', COMPRESSION_LEVEL 22, STRING_DICTIONARY_PAGE_SIZE_LIMIT 100_000, FILE_SIZE_BYTES {})",
                 in_path.display(),
-                mid_dir.display()
+                mid_dir.display(),
+                max_file_size
             );
             conn.execute_batch(&sql)?;
             let _ = fs::remove_file(&in_path);
@@ -2129,9 +2134,10 @@ async fn finalize_output_parallel(out_root: &Path) -> Result<()> {
                 "SET enable_progress_bar_print=TRUE; SET progress_bar_time=0; SET threads=1;",
             )?;
             let sql = format!(
-                "COPY (SELECT * FROM parquet_scan('{}')) TO '{}' (FORMAT 'parquet', COMPRESSION 'zstd', COMPRESSION_LEVEL 22, STRING_DICTIONARY_PAGE_SIZE_LIMIT 100000, FILE_SIZE_BYTES 5000000000)",
+                "COPY (SELECT * FROM parquet_scan('{}')) TO '{}' (FORMAT 'parquet', COMPRESSION 'zstd', COMPRESSION_LEVEL 22, STRING_DICTIONARY_PAGE_SIZE_LIMIT 100_000, FILE_SIZE_BYTES {})",
                 glob,
-                mid_dir.display()
+                mid_dir.display(),
+                max_file_size
             );
             conn.execute_batch(&sql)?;
             let _ = fs::remove_dir_all(out_root_c.join(format!("tmp/{}", dname_c)));
