@@ -9,7 +9,7 @@ parquet_file = "data/kbnl/kbnl.parquet"
 
 @dg.asset(pool="download")
 def kbnl_crawl(context: dg.AssetExecutionContext):
-    cmd = f"python src/crawl-oai-pmh.py -e https://services.kb.nl/mdo/oai -o {work_file} -p picaplus -s GGC"
+    cmd = f"python src/crawl-oai-pmh.py -e https://services.kb.nl/mdo/oai -o {work_file} -p picaplus -s GGC -f 2013-01-01"
     log_and_run(cmd, context)
 
 

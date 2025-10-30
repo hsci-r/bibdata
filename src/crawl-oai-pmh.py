@@ -8,6 +8,7 @@ import fsspec
 from lxml import etree # pyright: ignore[reportAttributeAccessIssue]
 from requests import HTTPError
 from sickle import Sickle, OAIResponse, oaiexceptions
+from sickle.utils import get_namespace
 from tqdm import tqdm
 
 _huge_tree_xml_parser = etree.XMLParser(remove_blank_text=True, huge_tree=True, recover=True, resolve_entities=False)
@@ -21,8 +22,12 @@ class HugeTreeOAIResponse(OAIResponse):
     @property
     def xml(self):
         """The server's response as parsed XML."""
-        return etree.XML(self.http_response.content,
+        tree = etree.XML(self.http_response.content,
                          parser=_huge_tree_xml_parser)
+        oai_namespace = get_namespace(tree)
+        for subrecord in tree.findall(f'.//{oai_namespace}record//{oai_namespace}record'): # fix bad namespaces with records in records
+            subrecord.tag = 'record'
+        return tree
 
 
 class HugeTreeSickle(Sickle):

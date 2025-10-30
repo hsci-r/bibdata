@@ -57,8 +57,11 @@ DBI::dbExecute(con, "SET memory_limit = '64GB';")
 files <- Sys.glob(params$dataset)
 dmtime <- if (params$date_modified!='') params$date_modified else strftime(fs::file_info(files[[1]])$modification_time,"%Y-%m-%d")
 
-d_a <- open_dataset(files)
-d <- d_a |> to_duckdb()
+duckdb_open_parquet <- function(glob, db_connection=getOption("arrow_duck_con")) {
+  tbl(db_connection, glue::glue("read_parquet('{glob}')"))
+}
+
+d <- duckdb_open_parquet(params$dataset)
 
 db_sample <- function(table, percent) {
   tbl(con, sql(glue::glue("{dbplyr::sql_render(table)} USING SAMPLE {percent}%")))
@@ -158,6 +161,7 @@ d |>
   count(language) |>
   mutate(n=as.integer(n), prop=n/sum(n)) |>
   arrange(desc(n)) |>
+  collect() |>
   gt(rowname_col='language') |>
   cols_label(n="Records (N)", prop="Proportion (%)") |>
   fmt_number(n, decimals = 0) |>

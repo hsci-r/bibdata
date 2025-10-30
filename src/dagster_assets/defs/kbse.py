@@ -1,15 +1,21 @@
-
-
 import dagster as dg
 from dagster_assets.utils import get_date_from_file_modification_time, log_and_run, create_overview, run_bibxml2
 
+work_dir = "data/work/kbse/"
 work_file = "data/work/kbse.mrcx.gz"
 parquet_file = "data/kbse/kbse.parquet"
 
 
-@dg.asset(pool="download")
+#@dg.asset(pool="download")
+#def kbse_crawl(context: dg.AssetExecutionContext):
+#    cmd = f"python src/crawl-oai-pmh.py -e https://libris.kb.se/api/oaipmh/ -o {work_file} -p marcxml_includehold_expanded"
+#    log_and_run(cmd, context)
+
+@dg.asset(backfill_policy=dg.BackfillPolicy.multi_run(1), partitions_def=dg.MonthlyPartitionsDefinition(start_date="2002-01", fmt="%Y-%m"), pool="kbse_api")
 def kbse_crawl(context: dg.AssetExecutionContext):
-    cmd = f"python src/crawl-oai-pmh.py -e https://libris.kb.se/api/oaipmh/ -o {work_file} -p marcxml_includehold_expanded"
+    start = context.partition_time_window.start.strftime("%Y-%m")
+    end = context.partition_time_window.end.strftime("%Y-%m")
+    cmd = f"python src/crawl-oai-pmh.py -e https://libris.kb.se/api/oaipmh/ -o {work_dir}/{start}.mrcx.zst -p marcxml_includehold_expanded -f {start if start != '2002-01' else '0000-01'}-01 -u {end}-01"
     log_and_run(cmd, context)
 
 
@@ -22,7 +28,7 @@ def kbse_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
 def kbse_overview(context: dg.AssetExecutionContext):
     create_overview(
         context,
-        name="Dutch National Library",
+        name="Swedish National Library",
         data_glob=parquet_file,
         date_modified=get_date_from_file_modification_time(work_file),
         fields_file="data/schema-info/gcc_pica_fields.tsv",

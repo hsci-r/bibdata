@@ -1,0 +1,289 @@
+---
+title: Bibdata data space
+output:
+  html_document:
+    toc: yes
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1500px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r setup, echo=F, warning=F, error=F, include=F}
+knitr::opts_chunk$set(echo=F, warning=F, error=F)
+#params=list(dataset_name= "ERB",dataset="../data/dnb/dnb.parquet",field_descriptions="../data/schema-info/pica_fields.tsv",subfield_descriptions="../data/schema-info/pica_subfields.tsv", min_year=1400,max_year=1800)
+library(tidyverse)
+library(gt)
+library(glue)
+library(gghsci)
+library(ggplot2)
+library(arrow)
+library(here)
+
+p <- function(number) {
+  return(scales::number(number, big.mark = ","))
+}
+pp <- function(percentage, accuracy = 0.01) {
+  return(scales::percent(percentage, accuracy = accuracy))
+}
+if (is.null(getOption("arrow_duck_con"))) {
+  options(
+    arrow_duck_con = DBI::dbConnect(
+      duckdb::duckdb(bigint = "integer64"),
+      bigint = "integer64",
+      dbdir = str_c(tempdir(), "/duckdb")
+    )
+  )
+}
+con <- getOption("arrow_duck_con")
+
+DBI::dbExecute(con, "SET preserve_insertion_order = false;")
+DBI::dbExecute(con, "SET memory_limit = '64GB';")
+
+datasets <- Sys.glob(here("data/*/*.parquet")) |> map(\(x) x |> str_extract(".*/([^/]*)/", group=1)) |> unique()
+
+d <- datasets |> 
+  map(\(ds) tbl(con, glue::glue("read_parquet('data/{ds}/*.parquet')")) |>
+        mutate(dataset = ds)
+  ) |> 
+  reduce(function(acc, nxt) {
+    if (!"record_number" %in% colnames(nxt)) acc else list(ds=if (is.null(acc$ds)) nxt else acc$ds |> 
+           union_all(nxt |> 
+                       mutate(record_number=acc$max_record_number + record_number)), 
+         max_record_number=acc$max_record_number + nxt |> 
+           summarise(max(record_number)) |> 
+           pull()
+    )
+  }, .init=list(ds=NULL, max_record_number=0L)) |>
+  pluck("ds")
+
+formats <- read_tsv(here("data/schema-info/collection_info.tsv")) |> 
+  to_duckdb()
+
+
+list.files(here("data/wikidata/")) |> 
+  str_replace("(_[0-9])*\\.parquet","") |> 
+  unique() |>
+  walk(\(name) .GlobalEnv[[str_c('wd_',name)]] <- tbl(con, glue::glue("read_parquet('data/wikidata/{name}*.parquet')")))
+
+viaf <- tbl(con, glue::glue("read_parquet('data/viaf/*.parquet')"))
+```
+
+# Overall summary
+
+`r d |> distinct(record_number) |> count() |> pull() |> as.integer() |> p()` records and `r d |> count() |> pull() |> as.integer() |> p()` attribute values in total. Constituent files:
+
+```{r filelist, results = 'asis'}
+
+cat("\n\n")
+for (file in files[order(files |> str_replace(".parquet", ""))]) {
+  unit_size <- unit_print(fs::file_info(file)$size)
+  cat(glue::glue("- {file} ({unit_size})\n"))
+}
+cat("\n")
+```
+
+```{r}
+p_titles <- d |> 
+  inner_join(formats |> filter(standard =="marc21")) |>
+  filter(field_code=="245", subfield_code=="a") |>
+  union_all(d |> 
+              inner_join(formats |> filter(standard=="intermarc")) |>
+              filter(field_code=="245", subfield_code=="a")
+  ) |>
+  union_all(d |> 
+              inner_join(formats |> filter(standard=="unimarc")) |>
+              filter(field_code=="200", subfield_code=="a")
+  ) |>
+  union_all(d |> 
+              inner_join(formats |> filter(standard=="pica")) |>
+              filter(field_code=="021A", subfield_code=="a")
+  ) |>
+  union_all(d |> 
+              inner_join(formats |> filter(standard=="istc")) |>
+              filter(field_code=="title")
+  ) |>
+  select(record_number, main_title=value) |>
+  compute()
+```
+
+
+```{r}
+p_datasets <- d |> 
+  group_by(dataset) |> 
+  summarise(min_record_number=min(record_number),max_record_number=max(record_number)) |>
+  compute()
+```
+
+
+## Temporal overview
+
+```{r temporal}
+p_years <- d |> 
+  inner_join(formats |> filter(standard=="marc21")) |>
+  filter(field_code=="008") |> 
+  mutate(value=str_sub(value, 8, 11)) |> 
+  union_all(
+    d |> 
+      inner_join(formats |> filter(standard=="intermarc")) |>
+      filter(field_code=="008") |> 
+      mutate(value=str_sub(value, 9, 12))
+  ) |>
+  union_all(
+    d |> 
+      inner_join(formats |> filter(standard=="unimarc")) |>
+      filter(field_code=="100") |> 
+      mutate(value=str_sub(value, 10, 13))
+  ) |>
+  union_all(
+    d |> 
+      inner_join(formats |> filter(standard=="pica")) |>
+      filter(field_code=="011@")
+  ) |>
+  union_all(
+    d |> 
+      inner_join(formats |> filter(standard=="istc")) |>
+      filter(field_code=="date_of_item_single_date")
+  ) |>
+  union_all(d |>
+    filter(dataset=="viaf", field_code=="997") |>
+    mutate(value=str_sub(value, 1, 5))
+  ) |>
+  filter(str_detect(value, "^\\d{1,4}$")) |>
+  mutate(year=as.integer(value)) |>
+  select(record_number, year) |>
+  compute()
+```
+
+
+```{r temporal}
+p_years |>
+  count(dataset, year) |>
+  mutate(n=as.integer(n)) |>
+  filter(year >= 1400L,year <= 2025L) |>
+  ggplot(aes(x=year, y=n)) +
+  geom_step() +
+  theme_hsci_discrete() +
+  xlab("Year") +
+  ylab("Records (N)") +
+  scale_y_continuous(labels=p) +
+  scale_x_continuous(breaks=seq(1400,2100, by=100)) +
+  facet_wrap(~dataset, scales="free_y")
+```
+
+```{r}
+p_years |> 
+  inner_join(p_datasets, join_by(between(record_number, min_record_number, max_record_number))) |> 
+  left_join(d |> filter(dataset=="hpb", field_code=="009@") |> select(record_number, value) |> rename(collection=value)) |>
+  mutate(dataset=coalesce(collection,dataset)) |>
+  filter(dataset!="hpb") |>
+  count(dataset, year) |>
+  mutate(n=as.integer(n)) |>
+  filter(year >= 1400L,year <= 2025L) |>
+  collect() |>
+  complete(dataset,year,fill=list(n=0)) |>
+  group_by(dataset) |>
+  arrange(year) |>
+  #mutate(n=(lag(n)+n+lead(n))/3) |>
+  ungroup() |>
+  ggplot(aes(x=year, y=n)) +
+  geom_line() +
+  theme_hsci_discrete() +
+  xlab("Year") +
+  ylab("Records (N)") +
+  scale_y_continuous(labels=p) +
+  scale_x_continuous(breaks=seq(1400,2100, by=100)) + facet_wrap(~dataset, scales="free_y")
+```
+
+
+### Records without easily parseable dates between the years 1000 and 2025
+
+```{r}
+p_datasets |> 
+  mutate(tn=max_record_number-min_record_number + 1) |>
+  inner_join(p_years |> 
+               inner_join(p_datasets, join_by(between(record_number, min_record_number, max_record_number))) |> 
+               distinct(record_number, dataset) |>
+               count(dataset)) |>
+  transmute(dataset, n=tn-n) |>
+  filter(n>0) |>
+  collect() |>
+  gt(rowname_col="dataset") |>
+  fmt_integer()
+```
+
+
+```{r}
+language_codes <- ISOcodes::ISO_639_2 |> 
+  select(language_code=Alpha_3_B, language=Name) |>
+  to_duckdb()
+
+p_languages <- d |>
+  filter(field_code=="010@", subfield_code=="a") |>
+  union_all(d |>
+    filter(field_code=="008") |>
+    mutate(value=str_sub(value, 36, 38))
+  ) |>
+  rename(language_code=value) |>
+  left_join(language_codes, join_by(language_code)) |>
+  transmute(record_number, language=if_else(is.na(language), language_code, str_c(language_code, " (", language, ")")))
+```
+
+```{r calculate_dataset_overlap}
+t <- p_titles |> 
+  inner_join(p_years, join_by(record_number)) |> 
+  inner_join(p_datasets, join_by(between(record_number, min_record_number, max_record_number))) |> 
+  left_join(d |> 
+              filter(dataset=="hpb", field_code=="009@") |> 
+              select(record_number, value) |> 
+              rename(collection=value)
+  ) |>
+  mutate(dataset=coalesce(collection, dataset)) |>
+  distinct(main_title, year, dataset) |>
+  compute()
+```
+
+```{r plot_dataset_overlap_absolute}
+t |> 
+  inner_join(t, join_by(main_title,year)) |> 
+  filter(dataset.x!=dataset.y) |> 
+  count(dataset.x, dataset.y) |> 
+  mutate(n=as.integer(n)) |> 
+  filter(n>=1000) |>
+  collect() |>
+  mutate(dataset.x=fct_infreq(dataset.x)) |>
+  mutate(dataset.y=fct_infreq(dataset.y)) |>
+  #filter(as.integer(dataset.x) > as.integer(dataset.y)) |>
+  mutate(dataset.y=fct_rev(dataset.y)) |>
+  ggplot(aes(x=dataset.x,y=dataset.y,label=n,fill=n)) + 
+  geom_tile() + 
+  theme_hsci() + 
+  scale_fill_viridis_c(trans='pseudo_log') + 
+  theme(axis.text.x = element_text(angle=90))
+```
+
+```{r plot_dataset_overlap_proportional}
+t |> 
+  inner_join(t, join_by(main_title,year)) |> 
+  filter(dataset.x!=dataset.y) |> 
+  count(dataset.x, dataset.y) |>
+  inner_join(
+    t |> count(dataset, name="tn"), join_by(dataset.y==dataset)) |>
+  mutate(n=as.integer(n),p=n/tn) |> 
+  filter(p>=0.05, dataset.y!="hpb") |>
+  collect() |>
+  mutate(dataset.x=fct_infreq(dataset.x)) |>
+  mutate(dataset.y=fct_infreq(dataset.y)) |>
+  #filter(as.integer(dataset.x) > as.integer(dataset.y)) |>
+  mutate(dataset.y=fct_rev(dataset.y)) |>
+  ggplot(aes(x=dataset.x,y=dataset.y,label=n,fill=p)) + 
+  geom_tile() +
+  geom_text(aes(label=scales::label_percent(accuracy=1)(p)), color='white') +
+  theme_hsci() + 
+  scale_fill_viridis_c() + 
+  theme(axis.text.x = element_text(angle=90))
+```
