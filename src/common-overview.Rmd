@@ -15,7 +15,6 @@ output:
 
 ```{r setup, echo=F, warning=F, error=F, include=F}
 knitr::opts_chunk$set(echo=F, warning=F, error=F)
-#params=list(dataset_name= "ERB",dataset="../data/dnb/dnb.parquet",field_descriptions="../data/schema-info/pica_fields.tsv",subfield_descriptions="../data/schema-info/pica_subfields.tsv", min_year=1400,max_year=1800)
 library(tidyverse)
 library(gt)
 library(glue)
@@ -24,12 +23,9 @@ library(ggplot2)
 library(arrow)
 library(here)
 
-p <- function(number) {
-  return(scales::number(number, big.mark = ","))
-}
-pp <- function(percentage, accuracy = 0.01) {
-  return(scales::percent(percentage, accuracy = accuracy))
-}
+p <- scales::label_number()
+pp <- scales::label_percent()
+
 if (is.null(getOption("arrow_duck_con"))) {
   options(
     arrow_duck_con = DBI::dbConnect(
@@ -47,7 +43,7 @@ DBI::dbExecute(con, "SET memory_limit = '64GB';")
 datasets <- Sys.glob(here("data/*/*.parquet")) |> map(\(x) x |> str_extract(".*/([^/]*)/", group=1)) |> unique()
 
 d <- datasets |> 
-  map(\(ds) tbl(con, glue::glue("read_parquet('data/{ds}/*.parquet')")) |>
+  map(\(ds) tbl(con, glue::glue("read_parquet('{here('data')}/{ds}/*.parquet')")) |>
         mutate(dataset = ds)
   ) |> 
   reduce(function(acc, nxt) {
@@ -70,6 +66,13 @@ list.files(here("data/wikidata/")) |>
   unique() |>
   walk(\(name) .GlobalEnv[[str_c('wd_',name)]] <- tbl(con, glue::glue("read_parquet('data/wikidata/{name}*.parquet')")))
 
+gnd <- tbl(con, glue::glue("read_parquet('data/gnd/*.parquet)"))
+tgn <- tbl(con, glue::glue("read_parquet('data/tgn/*.parquet"))
+gn <- tbl(con, glue::glue("read_parquet('data/geonames/geonames.parquet"))
+gn_alternate_names <- tbl(con, glue::glue("read_parquet('data/geonames/alternate_names.parquet"))
+isni <- tbl(con, glue::glue("read_parquet('data/isni/core.parquet"))
+isni_names <- tbl(con, glue::glue("read_parquet('data/isni/names.parquet"))
+ulan <- tbl(con, glue::glue("read_parquet('data/ulan/*.parquet"))
 viaf <- tbl(con, glue::glue("read_parquet('data/viaf/*.parquet')"))
 ```
 
