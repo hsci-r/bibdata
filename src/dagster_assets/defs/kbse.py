@@ -11,11 +11,12 @@ parquet_file = "data/kbse/kbse.parquet"
 #    cmd = f"python src/crawl-oai-pmh.py -e https://libris.kb.se/api/oaipmh/ -o {work_file} -p marcxml_includehold_expanded"
 #    log_and_run(cmd, context)
 
-@dg.asset(backfill_policy=dg.BackfillPolicy.multi_run(1), partitions_def=dg.MonthlyPartitionsDefinition(start_date="2002-01", fmt="%Y-%m"), pool="kbse_api")
+#@dg.asset(backfill_policy=dg.BackfillPolicy.multi_run(1), partitions_def=dg.MonthlyPartitionsDefinition(start_date="2002-01", fmt="%Y-%m"), pool="kbse_api")
+@dg.asset(backfill_policy=dg.BackfillPolicy.multi_run(1), partitions_def=dg.WeeklyPartitionsDefinition(start_date="2002-01-01", day_offset=2), pool="kbse_api")
 def kbse_crawl(context: dg.AssetExecutionContext):
-    start = context.partition_time_window.start.strftime("%Y-%m")
-    end = context.partition_time_window.end.strftime("%Y-%m")
-    cmd = f"python src/crawl-oai-pmh.py -e https://libris.kb.se/api/oaipmh/ -o {work_dir}/{start}.mrcx.zst -p marcxml_includehold_expanded -f {start if start != '2002-01' else '0000-01'}-01 -u {end}-01"
+    start = context.partition_time_window.start.strftime("%Y-%m-%d")
+    end = context.partition_time_window.end.strftime("%Y-%m-%d")
+    cmd = f"python src/crawl-oai-pmh.py -e https://libris.kb.se/api/oaipmh/ -o {work_dir}/{start}.mrcx.zst -p marcxml_includehold_expanded -f {start if start != '2002-01-01' else '0000-01-01'} -u {end}"
     log_and_run(cmd, context)
 
 

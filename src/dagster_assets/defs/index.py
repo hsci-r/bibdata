@@ -18,8 +18,9 @@ from dagster_assets.defs.bnf import bnf_overview
 from dagster_assets.defs.kbnl import kbnl_overview
 from dagster_assets.defs.kbse import kbse_overview
 from dagster_assets.defs.stcn import stcn_overview
+from dagster_assets.defs.stcv import stcv_overview
 
-@dg.asset(deps=[estc_overview, cnb_overview, stcn_overview, dnb_overview, erb_overview, gnd_overview, fennica_overview, hpb_overview, istc_overview, plnb_overview, ptnb_overview, vd17_overview, vd18_overview, viaf_overview, bnf_overview, kbnl_overview, kbse_overview])
+@dg.asset(deps=[estc_overview, cnb_overview, stcn_overview, stcv_overview, dnb_overview, erb_overview, gnd_overview, fennica_overview, hpb_overview, istc_overview, plnb_overview, ptnb_overview, vd17_overview, vd18_overview, viaf_overview, bnf_overview, kbnl_overview, kbse_overview])
 def index(context: dg.AssetExecutionContext):
     cmd = "python src/create-index.py"
     log_and_run(cmd, context)

@@ -44,6 +44,10 @@ def yield_rows(inputs: list[str], replace_prefix: Callable[[str], str]) -> Itera
                 inf = oinf
             with TextIOWrapper(inf, encoding='utf-8') as tinf:
                 for line in tinf:
+                    if line == '\n':
+                        continue
+                    if line.startswith('#'):
+                        continue
                     s, p, o = line.split(' ', 2)
                     o = o[:-3] if o.endswith(' .\n') else o[:-2]
                     object_is_literal = o.startswith('"')
@@ -109,7 +113,7 @@ def convert_ntriples(input: list[str], prefixes: str, output: str, max_file_size
     duckdb.query("SET progress_bar_time=0")
     duckdb.query("SET threads=1")
     print("Coalescing and optimising into unified parquet(s):")
-    duckdb.query(f"COPY (SELECT * FROM parquet_scan('{output}.tmp/*/*.parquet', hive_partitioning=TRUE)) TO '{output}.tmp.2' (FORMAT 'parquet', COMPRESSION 'zstd', COMPRESSION_LEVEL 22, STRING_DICTIONARY_PAGE_SIZE_LIMIT 100_000, FILE_SIZE_BYTES {max_file_size})")
+    duckdb.query(f"COPY (SELECT DISTINCT * FROM parquet_scan('{output}.tmp/*/*.parquet', hive_partitioning=TRUE)) TO '{output}.tmp.2' (FORMAT 'parquet', COMPRESSION 'zstd', COMPRESSION_LEVEL 22, STRING_DICTIONARY_PAGE_SIZE_LIMIT 100_000, FILE_SIZE_BYTES {max_file_size})")
     shutil.rmtree(output+".tmp", ignore_errors=True)
     print("Renaming final parquet files:")
     shutil.rmtree(output, ignore_errors=True)
