@@ -96,6 +96,7 @@ def stream_oai_records(
 ) -> Iterator[str]:
     stats: dict[str, int] = {'reqs': 0, 'deleted': 0, 'accepted': 0}
     resumption_token: Optional[str] = None
+    closed_responses = 0
     with tqdm(unit="records", smoothing=0, total=None, leave=True, dynamic_ncols=True) as progress_bar:
         while True:
             if resumption_token:
@@ -108,9 +109,8 @@ def stream_oai_records(
                     params['from'] = from_timestamp
                 if until_timestamp:
                     params['until'] = until_timestamp
-
-            response = _request_with_retry(session, endpoint, params, max_retries=max_retries, timeout=timeout)
             stats['reqs'] += 1
+            response = _request_with_retry(session, endpoint, params, max_retries=max_retries, timeout=timeout)
             progress_bar.set_postfix(stats, refresh=False)
             parser = etree.XMLPullParser(events=('end',), recover=True, huge_tree=True, resolve_entities=False)
             response.raw.decode_content = True
@@ -128,24 +128,31 @@ def stream_oai_records(
                             continue
                         tag = _strip_tag(elem.tag)
                         if tag == 'record':
-                            record_xml: Optional[str] = None
                             if _is_deleted_record(elem):
                                 stats['deleted'] += 1
+                                progress_bar.set_postfix(stats, refresh=False)
+                                progress_bar.update(1)
+                            elif full_record:
+                                if strip_xml:
+                                    _strip_namespaces(elem)
+                                record_xml = ElementTree.tostring(elem, encoding='unicode', method='xml')
+                                stats['accepted'] += 1
+                                progress_bar.set_postfix(stats, refresh=False)
+                                progress_bar.update(1)
+                                yield record_xml
                             else:
-                                payload = elem
-                                if not full_record:
-                                    payload = elem.find(_qualify('metadata', OAI_NAMESPACE))[0]
-                                if payload is None:
+                                metadata = elem.find(_qualify('metadata', OAI_NAMESPACE))
+                                if metadata is None or len(metadata) == 0:
                                     logging.warning("Skipping record with missing payload: %s", etree.tostring(elem))
                                 else:
-                                    if strip_xml:
-                                        _strip_namespaces(payload)
-                                    record_xml = ElementTree.tostring(payload, encoding='unicode', method='xml')
-                                    stats['accepted'] += 1
-                            progress_bar.set_postfix(stats, refresh=False)
-                            progress_bar.update(1)
-                            if record_xml:
-                                yield record_xml
+                                    for child in metadata:
+                                        if strip_xml:
+                                            _strip_namespaces(child)
+                                        record_xml = ElementTree.tostring(child, encoding='unicode', method='xml')
+                                        stats['accepted'] += 1
+                                        progress_bar.set_postfix(stats, refresh=False)
+                                        progress_bar.update(1)
+                                        yield record_xml
                         elif tag == 'resumptionToken':
                             complete_list_size = elem.get('completeListSize')
                             if complete_list_size:
@@ -161,6 +168,8 @@ def stream_oai_records(
                             if code == 'noRecordsMatch':
                                 raise OAINoRecordsMatch(message or 'No records match the request')
                             raise RuntimeError(f"OAI error {code}: {message}")
+                        elif tag == 'OAI-PMH':
+                            closed_responses += 1
                         elif not tag in {'OAI-PMH','request','responseDate','ListRecords'}:
                             logging.warning("Skipping unexpected element: %s", etree.tostring(elem))
                         _cleanup_element(elem)
@@ -170,6 +179,8 @@ def stream_oai_records(
             if not next_token:
                 break
             resumption_token = next_token
+    if closed_responses != stats['reqs']:
+        raise RuntimeError(f"Number of closed responses ({closed_responses}) does not match number of requests ({stats['reqs']})")
 
 
 def _list_metadata_formats(
