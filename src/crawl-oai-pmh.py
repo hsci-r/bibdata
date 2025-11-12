@@ -81,11 +81,6 @@ def _request_with_retry(
     assert last_exc is not None
     raise last_exc
 
-
-def _update_progress_postfix(progress_bar: tqdm, stats: dict[str, int]) -> None:
-    progress_bar.set_postfix(dict(stats), refresh=False)
-
-
 def stream_oai_records(
     session: requests.Session,
     endpoint: str,
@@ -99,10 +94,9 @@ def stream_oai_records(
     max_retries: int = DEFAULT_MAX_RETRIES,
     timeout: tuple[int, int] = DEFAULT_TIMEOUT,
 ) -> Iterator[str]:
-    progress_bar = tqdm(unit="records", smoothing=0, total=None, leave=True, dynamic_ncols=True)
     stats: dict[str, int] = {'reqs': 0, 'deleted': 0, 'accepted': 0}
     resumption_token: Optional[str] = None
-    try:
+    with tqdm(unit="records", smoothing=0, total=None, leave=True, dynamic_ncols=True) as progress_bar:
         while True:
             if resumption_token:
                 params = {'verb': 'ListRecords', 'resumptionToken': resumption_token}
@@ -117,7 +111,7 @@ def stream_oai_records(
 
             response = _request_with_retry(session, endpoint, params, max_retries=max_retries, timeout=timeout)
             stats['reqs'] += 1
-            _update_progress_postfix(progress_bar, stats)
+            progress_bar.set_postfix(stats, refresh=False)
             parser = etree.XMLPullParser(events=('end',), recover=True, huge_tree=True, resolve_entities=False)
             response.raw.decode_content = True
             next_token: Optional[str] = None
@@ -129,8 +123,7 @@ def stream_oai_records(
                     for _, elem in parser.read_events():
                         if any(_get_namespace(parent) == OAI_NAMESPACE and _strip_tag(parent.tag) == 'record' for parent in elem.iterancestors()):
                             continue
-                        namespace = _get_namespace(elem)
-                        if namespace != OAI_NAMESPACE:
+                        if _get_namespace(elem) != OAI_NAMESPACE:
                             logging.warning("Skipping element with unexpected namespace: %s", etree.tostring(elem))
                             continue
                         tag = _strip_tag(elem.tag)
@@ -141,7 +134,7 @@ def stream_oai_records(
                             else:
                                 payload = elem
                                 if not full_record:
-                                    payload = elem.find(_qualify('metadata', namespace))[0]
+                                    payload = elem.find(_qualify('metadata', OAI_NAMESPACE))[0]
                                 if payload is None:
                                     logging.warning("Skipping record with missing payload: %s", etree.tostring(elem))
                                 else:
@@ -149,19 +142,18 @@ def stream_oai_records(
                                         _strip_namespaces(payload)
                                     record_xml = ElementTree.tostring(payload, encoding='unicode', method='xml')
                                     stats['accepted'] += 1
+                            progress_bar.set_postfix(stats, refresh=False)
                             progress_bar.update(1)
-                            _update_progress_postfix(progress_bar, stats)
                             if record_xml:
                                 yield record_xml
                         elif tag == 'resumptionToken':
-                            if progress_bar.total is None:
-                                complete_list_size = elem.get('completeListSize')
-                                if complete_list_size:
-                                    try:
-                                        progress_bar.total = int(complete_list_size)
-                                        progress_bar.refresh()
-                                    except ValueError:
-                                        logging.debug("Invalid completeListSize: %s", complete_list_size)
+                            complete_list_size = elem.get('completeListSize')
+                            if complete_list_size:
+                                try:
+                                    progress_bar.total = int(complete_list_size)
+                                    progress_bar.refresh()
+                                except ValueError:
+                                    logging.debug("Invalid completeListSize: %s", complete_list_size)
                             next_token = elem.text
                         elif tag == 'error':
                             code = elem.get('code', 'unknown')
@@ -178,8 +170,6 @@ def stream_oai_records(
             if not next_token:
                 break
             resumption_token = next_token
-    finally:
-        progress_bar.close()
 
 
 def _list_metadata_formats(
@@ -194,8 +184,7 @@ def _list_metadata_formats(
     finally:
         response.close()
     root = etree.fromstring(content)
-    namespace = _get_namespace(root)
-    xpath = _qualify('metadataPrefix', namespace)
+    xpath = _qualify('metadataPrefix', OAI_NAMESPACE)
     return [node.text.strip() for node in root.findall(f'.//{xpath}') if node.text]
 
 
@@ -211,9 +200,8 @@ def _list_sets(
     finally:
         response.close()
     root = etree.fromstring(content)
-    namespace = _get_namespace(root)
-    spec_xpath = f'.//{_qualify("setSpec", namespace)}'
-    name_xpath = f'.//{_qualify("setName", namespace)}'
+    spec_xpath = f'.//{_qualify("setSpec", OAI_NAMESPACE)}'
+    name_xpath = f'.//{_qualify("setName", OAI_NAMESPACE)}'
     specs = [node.text.strip() for node in root.findall(spec_xpath) if node.text]
     names = [node.text.strip() for node in root.findall(name_xpath) if node.text]
     return list(zip(specs, names))
@@ -226,22 +214,8 @@ def _get_namespace(elem: etree._Element) -> Optional[str]:
 
 
 def _is_deleted_record(record_elem: etree._Element) -> bool:
-    namespace = _get_namespace(record_elem)
-    header = record_elem.find(_qualify('header', namespace))
+    header = record_elem.find(_qualify('header', OAI_NAMESPACE))
     return header is not None and header.get('status') == 'deleted'
-
-
-def _select_record_payload(record_elem: etree._Element, full_record: bool) -> Optional[etree._Element]:
-    namespace = _get_namespace(record_elem)
-    if full_record:
-        return record_elem
-    metadata_elem = record_elem.find(_qualify('metadata', namespace))
-    if metadata_elem is None:
-        return None
-    for child in metadata_elem:
-        return child
-    return None
-
 
 @click.command()
 @click.option('-p', '--metadata-prefix', help="Metadata prefix to query")
