@@ -52,7 +52,7 @@ def dbnf_overview(context: dg.AssetExecutionContext):
         context,
         name="French National Library Linked Data",
         data_glob=parquet_file,
-        date_modified=get_date_from_last_modified_file(work_dir + "/*.tar.gz"),
+        date_modified=get_date_from_file_modification_time(work_dir + "/*.tar.gz"),
         properties_file="data/schema-info/rdf_properties.tsv",
         output_file="data/dbnf/dbnf-overview.html"
     )
