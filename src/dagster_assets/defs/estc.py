@@ -1,7 +1,7 @@
 
 
 import dagster as dg
-from dagster_assets.utils import create_overview, run_bibxml2
+from dagster_assets.utils import create_bib_overview, run_bibxml2
 
 input_glob = "data/work/estc/ESTC0920.xml.gz"
 parquet_file = "data/estc/estc.parquet"
@@ -16,7 +16,7 @@ def estc_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
 
 @dg.asset(deps=[estc_parquet], pool="overview")
 def estc_overview(context: dg.AssetExecutionContext):
-    create_overview(
+    create_bib_overview(
         context,
         name="English Short Title Catalogue",
         data_glob=parquet_file,

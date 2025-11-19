@@ -1,7 +1,7 @@
 
 
 import dagster as dg
-from dagster_assets.utils import get_date_from_file_modification_time, log_and_run, create_overview, run_bibxml2
+from dagster_assets.utils import get_date_from_file_modification_time, log_and_run, create_bib_overview, run_bibxml2
 
 work_file = "data/work/erb.mrcx.gz"
 parquet_file = "data/erb/erb.parquet"
@@ -21,7 +21,7 @@ def erb_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
 
 @dg.asset(deps=[erb_parquet], pool="overview")
 def erb_overview(context: dg.AssetExecutionContext):
-    create_overview(
+    create_bib_overview(
         context,
         name="Estonian National Bibliography",
         data_glob=parquet_file,

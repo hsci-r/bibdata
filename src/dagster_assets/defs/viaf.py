@@ -1,5 +1,5 @@
 import dagster as dg
-from dagster_assets.utils import create_overview, get_parquet_glob_sha1sum, log_and_run, run_bibxml2, get_etag, download_file
+from dagster_assets.utils import create_bib_overview, get_parquet_glob_sha1sum, log_and_run, run_bibxml2, get_etag, download_file
 
 source_url = "https://downloads.viaf.org/download/yearly/viaf-20240804-clusters.xml.gz"
 input_file = "data/work/viaf/viaf.xml.gz"
@@ -25,7 +25,7 @@ def viaf_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
 
 @dg.asset(deps=[viaf_parquet], pool="overview")
 def viaf_overview(context: dg.AssetExecutionContext):
-    create_overview(
+    create_bib_overview(
         context,
         name="Virtual International Authority File",
         data_glob=parquet_file,

@@ -1,6 +1,6 @@
 import os
 import dagster as dg
-from dagster_assets.utils import create_overview, get_parquet_glob_sha1sum, log_and_run, run_bibxml2, get_etag, download_file
+from dagster_assets.utils import create_bib_overview, get_parquet_glob_sha1sum, log_and_run, run_bibxml2, get_etag, download_file
 
 source_url = "https://dumps.wikimedia.org/wikidatawiki/entities/latest-all.json.bz2"
 input_file = "data/work/wikidata/latest-all.json.bz2"

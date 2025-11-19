@@ -1,7 +1,7 @@
 
 
 import dagster as dg
-from dagster_assets.utils import create_overview, run_bibxml2
+from dagster_assets.utils import create_bib_overview, run_bibxml2
 
 input_glob = "data/work/hpb/*.mrcx.gz"
 parquet_file = "data/hpb/hpb.parquet"
@@ -16,7 +16,7 @@ def hpb_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
 
 @dg.asset(deps=[hpb_parquet], pool="overview")
 def hpb_overview(context: dg.AssetExecutionContext):
-    create_overview(
+    create_bib_overview(
         context,
         name="Heritage of the Printed Book",
         data_glob=parquet_file,

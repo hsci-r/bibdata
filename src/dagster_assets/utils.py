@@ -73,7 +73,7 @@ def get_parquet_glob_sha1sum(file_path: str) -> dg.MaterializeResult:
                 sha1.update(chunk)
     return dg.MaterializeResult(data_version=dg.DataVersion(sha1.hexdigest()))
 
-def create_overview(
+def create_bib_overview(
     context: dg.AssetExecutionContext,
     name: str,
     data_glob: str,
@@ -85,13 +85,30 @@ def create_overview(
     end_year: Optional[str] = None,
 ) -> None:
     log_and_run(
-        f"Rscript src/create-overview.R "
+        f"Rscript src/create-bib-overview.R " +
         f"-n '{name}' " +
         (f"-y {start_year} " if start_year else "") +
         (f"-z {end_year} " if end_year else "") +
         f"-d {data_glob.replace('.parquet','*.parquet')} " +
         (f"-f {fields_file} " if fields_file else "") +
         (f"-s {subfields_file} " if subfields_file else "") +
+        (f"-m {date_modified} " if date_modified else "") +
+        f"-o {output_file}", context
+    )
+
+def create_rdf_overview(
+    context: dg.AssetExecutionContext,
+    name: str,
+    data_glob: str,
+    date_modified: Optional[str],
+    properties_file: Optional[str],
+    output_file: str,
+) -> None:
+    log_and_run(
+        f"Rscript src/create-rdf-overview.R " +
+        f"-n '{name}' " +
+        f"-d {data_glob.replace('.parquet','*.parquet')} " +
+        (f"-p {properties_file} " if properties_file else "") +
         (f"-m {date_modified} " if date_modified else "") +
         f"-o {output_file}", context
     )

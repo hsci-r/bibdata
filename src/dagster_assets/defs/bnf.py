@@ -1,5 +1,5 @@
 import dagster as dg
-from dagster_assets.utils import get_date_from_file_modification_time, log_and_run, create_overview, run_bibxml2
+from dagster_assets.utils import get_date_from_file_modification_time, log_and_run, create_bib_overview, run_bibxml2
 
 work_dir = "data/work/bnf"
 parquet_file = "data/bnf/bnf.parquet"
@@ -22,7 +22,7 @@ def bnf_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
 
 @dg.asset(deps=[bnf_parquet], pool="overview")
 def bnf_overview(context: dg.AssetExecutionContext):
-    create_overview(
+    create_bib_overview(
         context,
         name="French National Bibliography (BNF)",
         data_glob=parquet_file,

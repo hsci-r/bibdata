@@ -40,40 +40,67 @@ con <- getOption("arrow_duck_con")
 DBI::dbExecute(con, "SET preserve_insertion_order = false;")
 DBI::dbExecute(con, "SET memory_limit = '64GB';")
 
-datasets <- Sys.glob(here("data/*/*.parquet")) |> map(\(x) x |> str_extract(".*/([^/]*)/", group=1)) |> unique()
-
-d <- datasets |> 
-  map(\(ds) tbl(con, glue::glue("read_parquet('{here('data')}/{ds}/*.parquet')")) |>
-        mutate(dataset = ds)
-  ) |> 
-  reduce(function(acc, nxt) {
-    if (!"record_number" %in% colnames(nxt)) acc else list(ds=if (is.null(acc$ds)) nxt else acc$ds |> 
-           union_all(nxt |> 
-                       mutate(record_number=acc$max_record_number + record_number)), 
-         max_record_number=acc$max_record_number + nxt |> 
-           summarise(max(record_number)) |> 
-           pull()
-    )
-  }, .init=list(ds=NULL, max_record_number=0L)) |>
-  pluck("ds")
-
 formats <- read_tsv(here("data/schema-info/collection_info.tsv")) |> 
   to_duckdb()
 
+td <- NULL
+md <- NULL
+max_record_number <- 0L
 
-list.files(here("data/wikidata/")) |> 
-  str_replace("(_[0-9])*\\.parquet","") |> 
-  unique() |>
-  walk(\(name) .GlobalEnv[[str_c('wd_',name)]] <- tbl(con, glue::glue("read_parquet('data/wikidata/{name}*.parquet')")))
-
-gnd <- tbl(con, glue::glue("read_parquet('data/gnd/*.parquet)"))
-tgn <- tbl(con, glue::glue("read_parquet('data/tgn/*.parquet"))
-gn <- tbl(con, glue::glue("read_parquet('data/geonames/geonames.parquet"))
-gn_alternate_names <- tbl(con, glue::glue("read_parquet('data/geonames/alternate_names.parquet"))
-isni <- tbl(con, glue::glue("read_parquet('data/isni/core.parquet"))
-isni_names <- tbl(con, glue::glue("read_parquet('data/isni/names.parquet"))
-ulan <- tbl(con, glue::glue("read_parquet('data/ulan/*.parquet"))
-viaf <- tbl(con, glue::glue("read_parquet('data/viaf/*.parquet')"))
+formats |> 
+  collect() |>
+  rowwise() |>
+  group_walk(\(row, ...) {
+    if (row$dataset == "wikidata") {
+      list.files(here("data/wikidata/")) |> 
+        str_replace("(_[0-9])*\\.parquet","") |> 
+        unique() |>
+        walk(\(name) .GlobalEnv[[str_c('wd_',name)]] <- tbl(con, glue::glue("read_parquet('{here('data/wikidata')}/{name}*.parquet')")))
+      NULL
+    } else if (row$dataset == "isni") {
+      list.files(here("data/isni/")) |> 
+        str_replace("(_[0-9])*\\.parquet","") |> 
+        unique() |>
+        walk(\(name) .GlobalEnv[[str_c('isni_',name)]] <- tbl(con, glue::glue("read_parquet('{here('data/isni')}/{name}*.parquet')")))
+    } else if (row$dataset == "geonames") {
+      .GlobalEnv[["geonames"]] <- tbl(con, glue::glue("read_parquet('{here('data')}/geonames/geonames*.parquet')"))
+      .GlobalEnv[["geonames_alternate_names"]] <- tbl(con, glue::glue("read_parquet('{here('data')}/geonames/alternate_names*.parquet')"))
+    } else if (row$standard == "rdf") {
+      ds <- tbl(con, glue::glue("read_parquet('{here('data')}/{row$dataset}/{row$dataset}*.parquet')")) |>
+        relocate(subject, property, object)
+      .GlobalEnv[[row$dataset]] <- ds
+      ds <- ds |> 
+        mutate(dataset=row$dataset)
+      if (is.null(.GlobalEnv[['td']]))
+        .GlobalEnv[['td']] <- ds
+      else
+        .GlobalEnv[['td']] <- .GlobalEnv[['td']] |> 
+          union_all(ds)
+    } else if (row$standard %in% c("intermarc", "marc21", "unimarc", "pica", "istc")) {
+      ds <- tbl(con, glue::glue("read_parquet('{here('data')}/{row$dataset}/{row$dataset}*.parquet')"))
+      .GlobalEnv[[row$dataset]] <- ds
+      if (ds |> head(n=1) |> count() |> pull() == 0) print(glue::glue("Dataset {row$dataset} is empty."))
+      else {
+        if (is.null(.GlobalEnv[['md']])) {
+          .GlobalEnv[['md']] <- ds |> 
+            mutate(dataset=row$dataset)
+          .GlobalEnv[['max_record_number']] <- ds |> 
+            summarise(max(record_number)) |> 
+            pull()        
+        } else 
+          max_record_number <- .GlobalEnv[['max_record_number']]
+        ds <- ds |> 
+          mutate(dataset=row$dataset, record_number = max_record_number + record_number)
+        .GlobalEnv[['md']] <- .GlobalEnv[['md']] |>
+          union_all(ds)
+        .GlobalEnv[['max_record_number']] <- ds |> 
+          summarise(max(record_number)) |> 
+          pull()
+      }
+    } else {
+      stop("Unknown dataset type ", row)
+    }
+  })
 ```
 
 # Overall summary
@@ -91,22 +118,22 @@ cat("\n")
 ```
 
 ```{r}
-p_titles <- d |> 
+p_titles <- md |> 
   inner_join(formats |> filter(standard =="marc21")) |>
   filter(field_code=="245", subfield_code=="a") |>
-  union_all(d |> 
+  union_all(md |> 
               inner_join(formats |> filter(standard=="intermarc")) |>
               filter(field_code=="245", subfield_code=="a")
   ) |>
-  union_all(d |> 
+  union_all(md |> 
               inner_join(formats |> filter(standard=="unimarc")) |>
               filter(field_code=="200", subfield_code=="a")
   ) |>
-  union_all(d |> 
+  union_all(md |> 
               inner_join(formats |> filter(standard=="pica")) |>
               filter(field_code=="021A", subfield_code=="a")
   ) |>
-  union_all(d |> 
+  union_all(md |> 
               inner_join(formats |> filter(standard=="istc")) |>
               filter(field_code=="title")
   ) |>
@@ -114,9 +141,46 @@ p_titles <- d |>
   compute()
 ```
 
+```{r}
+p_countries_of_publication <- md |> 
+  inner_join(formats |> filter(standard=="marc21")) |>
+  filter(field_code=="008") |> 
+  mutate(value=value |> str_sub(16, 18) |> str_squish()) |>
+  union_all(md |> 
+    inner_join(formats |> filter(standard=="marc21")) |>
+    filter(field_code=="044")
+  ) |>
+   union_all(
+    md |> 
+      inner_join(formats |> filter(standard=="intermarc")) |>
+      filter(field_code=="008") |> 
+      mutate(value=str_sub(value, 30, 31))
+  ) |>
+  union_all(
+    md |> 
+      inner_join(formats |> filter(standard=="unimarc")) |>
+      filter(field_code=="102", subfield_code=="a") 
+  ) |>
+  union_all(
+    md |> 
+      inner_join(formats |> filter(standard=="pica")) |>
+      filter(field_code=="019@", subfield_code=="a")
+  ) |>
+  union_all(
+    md |> 
+      inner_join(formats |> filter(standard=="istc")) |>
+      filter(subfield_code=="geo_info_imprint_country_code")
+  ) |>
+  mutate(value=value |> str_replace("[^-]*-", "") |> str_replace("-.*","") |> str_to_lower()) |>
+  distinct(record_number, country_of_publication=value) |>
+  compute()
+p_countries_of_publication
+```
+
+
 
 ```{r}
-p_datasets <- d |> 
+p_datasets <- md |> 
   group_by(dataset) |> 
   summarise(min_record_number=min(record_number),max_record_number=max(record_number)) |>
   compute()
@@ -126,36 +190,36 @@ p_datasets <- d |>
 ## Temporal overview
 
 ```{r temporal}
-p_years <- d |> 
+p_years <- md |> 
   inner_join(formats |> filter(standard=="marc21")) |>
   filter(field_code=="008") |> 
   mutate(value=str_sub(value, 8, 11)) |> 
   union_all(
-    d |> 
+    md |> 
       inner_join(formats |> filter(standard=="intermarc")) |>
       filter(field_code=="008") |> 
       mutate(value=str_sub(value, 9, 12))
   ) |>
   union_all(
-    d |> 
+    md |> 
       inner_join(formats |> filter(standard=="unimarc")) |>
       filter(field_code=="100") |> 
       mutate(value=str_sub(value, 10, 13))
   ) |>
   union_all(
-    d |> 
+    md |> 
       inner_join(formats |> filter(standard=="pica")) |>
       filter(field_code=="011@")
   ) |>
   union_all(
-    d |> 
+    md |> 
       inner_join(formats |> filter(standard=="istc")) |>
       filter(field_code=="date_of_item_single_date")
   ) |>
-  union_all(d |>
-    filter(dataset=="viaf", field_code=="997") |>
-    mutate(value=str_sub(value, 1, 5))
-  ) |>
+#  union_all(md |>
+#    filter(dataset=="viaf", field_code=="997") |>
+#    mutate(value=str_sub(value, 1, 5))
+#  ) |>
   filter(str_detect(value, "^\\d{1,4}$")) |>
   mutate(year=as.integer(value)) |>
   select(record_number, year) |>
@@ -225,15 +289,37 @@ language_codes <- ISOcodes::ISO_639_2 |>
   select(language_code=Alpha_3_B, language=Name) |>
   to_duckdb()
 
-p_languages <- d |>
-  filter(field_code=="010@", subfield_code=="a") |>
-  union_all(d |>
-    filter(field_code=="008") |>
-    mutate(value=str_sub(value, 36, 38))
+p_languages <- md |> 
+  inner_join(formats |> filter(standard=="marc21")) |>
+  filter(field_code=="008") |>
+  mutate(value=str_sub(value, 36, 38)) |>
+  union_all(
+    md |> 
+      inner_join(formats |> filter(standard=="intermarc")) |>
+      filter(field_code=="008") |> 
+      mutate(value=str_sub(value, 32, 34))
+  ) |>
+  union_all(
+    md |> 
+      inner_join(formats |> filter(standard=="unimarc")) |>
+      filter(field_code=="100") |> 
+      mutate(value=str_sub(value, 23, 25))
+  ) |>
+  union_all(
+    md |> 
+      inner_join(formats |> filter(standard=="pica")) |>
+      filter(field_code=="010@", subfield_code=="a")
+  ) |>
+  union_all(
+    md |> 
+      inner_join(formats |> filter(standard=="istc")) |>
+      filter(field_code=="date_of_item_single_date")
   ) |>
   rename(language_code=value) |>
   left_join(language_codes, join_by(language_code)) |>
-  transmute(record_number, language=if_else(is.na(language), language_code, str_c(language_code, " (", language, ")")))
+  select(record_number, language_code, language) |>
+  compute()
+#  transmute(record_number, language=if_else(is.na(language), language_code, str_c(language_code, " (", language, ")")))
 ```
 
 ```{r calculate_dataset_overlap}
@@ -290,3 +376,19 @@ t |>
   scale_fill_viridis_c() + 
   theme(axis.text.x = element_text(angle=90))
 ```
+
+```{r}
+plyd |> 
+  filter(year >= 1400L,year <= 2025L) |> 
+#  left_join(marc_countries |> 
+#              mutate(code=code |> str_remove("-")), join_by(country_of_publication==code)) |>
+#  mutate(country_of_publication=coalesce(country, country_of_publication)) |>
+  mutate(decade=10*floor(year/10), country_of_publication=country_of_publication |> fct_lump_n(24,w = n), language=language |> fct_lump_n(12, w=n),n=as.integer(n)) |> 
+  group_by(country_of_publication,decade,language) |> 
+  summarise(n=sum(n), .groups="drop") |> 
+  ggplot(aes(x=decade,y=n, fill=language)) + 
+  facet_wrap(~country_of_publication) + 
+  theme_hsci_discrete() + 
+  geom_area(position='fill')
+```
+

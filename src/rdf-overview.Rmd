@@ -1,0 +1,217 @@
+---
+params: 
+  dataset: ''
+  dataset_name: ''
+  property_descriptions: ''
+  out: ''
+  date_modified: ''
+  help: ''
+output:
+  html_document:
+    toc: yes
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1500px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+
+```{r setup, echo=F, warning=F, error=F, include=F}
+knitr::opts_chunk$set(echo=F, warning=F, error=F)
+library(here)
+#params=list(dataset_name="ULAN",dataset=here("data/ulan/ulan*.parquet"),property_descriptions="../data/schema-info/rdf_properties.tsv", min_year=1400,max_year=1800, date_modified='')
+start.time <- Sys.time()
+library(tidyverse)
+library(gt)
+library(glue)
+library(gghsci)
+library(ggplot2)
+library(arrow)
+
+p <- scales::label_number()
+pp <- scales::label_percent()
+if (is.null(getOption("arrow_duck_con"))) {
+  options(
+    arrow_duck_con = DBI::dbConnect(
+      duckdb::duckdb(bigint = "integer64"),
+      bigint = "integer64",
+      dbdir = str_c(tempdir(), "/duckdb")
+    )
+  )
+}
+con <- getOption("arrow_duck_con")
+
+DBI::dbExecute(con, "SET preserve_insertion_order = false;")
+DBI::dbExecute(con, "SET memory_limit = '48GB';")
+
+files <- Sys.glob(params$dataset)
+dmtime <- if (params$date_modified!='') params$date_modified else strftime(fs::file_info(files[[1]])$modification_time,"%Y-%m-%d")
+
+duckdb_open_parquet <- function(glob, db_connection=getOption("arrow_duck_con")) {
+  tbl(db_connection, glue::glue("read_parquet('{glob}')"))
+}
+
+d <- duckdb_open_parquet(params$dataset)
+
+db_sample <- function(table, percent) {
+  tbl(con, sql(glue::glue("{dbplyr::sql_render(table)} USING SAMPLE {percent}%")))
+}
+
+property_descriptions <- if (params$property_descriptions!='') read_tsv(params$property_descriptions) else tibble(
+  property = character(),
+  name = character(),
+  description = character()
+)
+
+unit_print <- function(n) {
+  return(case_when(
+    n < 1000 ~ paste0(n, "B"),
+    n < 1000000 ~ paste0(n / 1000, "KB"),
+    n < 1000000000 ~ paste0(n / 1000000, "MB"),
+    n < 1000000000000 ~ paste0(n / 1000000000, "GB"),
+    n < 1000000000000000 ~ paste0(n / 1000000000000, "TB"),
+    n < 1000000000000000000 ~ paste0(n / 1000000000000000, "PB"),
+    TRUE ~ paste0(n / 1000000000000000000, "EB")))
+}
+
+types <- d |> 
+  filter(property=="rdf:type") |> 
+  group_by(subject) |> 
+  summarise(types=sql("STRING_AGG(DISTINCT object, ', ' ORDER BY object)")) |> 
+  compute()
+
+subjects <- d |> 
+  distinct(subject) |> 
+  compute()
+#n_subjects <- d |> distinct(subject) |> count() |> pull() |> as.integer()
+```
+
+---
+title: Composition Analysis of the `r params$dataset_name` dated `r dmtime`
+---
+
+# Overall summary
+
+`r p(subjects |> count() |> pull() |> as.integer())` subjects and `r p(d |> count() |> pull() |> as.integer())` triples in total. Constituent files:
+
+```{r filelist, results = 'asis'}
+
+cat("\n\n")
+for (file in files[order(files |> str_replace(".parquet", ""))]) {
+  unit_size <- unit_print(fs::file_info(file)$size)
+  cat(glue::glue("- {file} ({unit_size})\n"))
+}
+cat("\n")
+```
+
+## Data types
+
+```{r types}
+types |>
+  count(types) |>
+  mutate(n=as.integer(n)) |>
+  arrange(desc(n)) |>
+  collect() |>
+  gt(rowname_col="types") |>
+  fmt_number(where(is.numeric), decimals = 0)
+#  fmt_percent(r_p, decimals = 2, drop_trailing_zeros = TRUE) |>
+#  fmt_number(vals_per_rec, decimals = 2, drop_trailing_zeros = TRUE) |>
+#  data_color(columns=r_p, palette="viridis") |>
+#  data_color(columns=vals_per_rec, palette="viridis", method="quantile", quantiles=8) |>
+#  fmt_passthrough(subproperty, escape=F)
+```
+
+`r subjects |> anti_join(types, join_by(subject)) |> count() |> pull() |> as.integer() |> p()` subjects do not have type info.
+
+# Property usage overview
+
+```{r property_usage_overview_data}
+
+property_example_objs <- d |>
+  left_join(types, join_by(subject)) |>
+  count(types, property, object) |>
+  group_by(types, property) |>
+  slice_sample(n = 7) |>
+  summarise(e_objs = str_flatten(str_c(object, ' (', n, ')'), collapse = "|"), .groups = "drop") |>
+#  union_all(subproperty_example_vals) |>
+  collect()
+
+property_dist_objs <- d |>
+  left_join(types, join_by(subject)) |>
+  group_by(types, property) |>
+  summarise(dist_objs=n_distinct(object), .groups="drop") |>
+  collect()
+
+property_usage_stats <- d |>
+  left_join(types |>
+    inner_join(types |> count(types, name="n_subjects"), join_by(types)), join_by(subject)) |>
+  replace_na(list(n_subjects=subjects |> count() |> pull() - types |> count() |> pull())) |>
+  group_by(types, n_subjects, property) |>
+  summarise(subjects = n_distinct(subject), n = n(), .groups = "drop") |>
+  mutate(r_p = subjects / n_subjects) |>
+  mutate(objs_per_rec = n / subjects) |>
+  collect() |>
+  left_join(
+    d |>
+      count(subject, property) |>
+      filter(n > 1L) |>
+      ungroup() |>
+      left_join(types, join_by(subject)) |>
+      count(types, property, name = "subjs_with_mult_vals") |>
+      collect(),
+    join_by(types, property)
+  ) |>
+  replace_na(list(subjs_with_mult_vals = 0)) |>
+  left_join(property_dist_objs, join_by(types, property)) |>
+  left_join(property_example_objs, join_by(types, property)) |>
+  left_join(property_descriptions, join_by(property)) |>
+  relocate(property, description, subjects, r_p, dist_objs, e_objs) |>
+  arrange(property) |>
+  mutate(across(where(bit64::is.integer64), as.integer))
+
+rm(property_example_objs, property_dist_objs)
+```
+
+In total, `r property_usage_stats |> distinct(property) |> count() |> pull(n) |> as.integer() |> p()` distinct properties are used.
+
+Legend for the tables below:
+
+* `subjects`: how many subjects have at least one of this property
+* `r_p`: the above as a percentage of all subjects
+* `dist_objs`: the number of different values appearing in this property
+* `e_objs`: at most seven random sample values of this property
+* `n`: the total number of appearances of this property
+* `objs_per_rec`: calculated from the above, the mean number of appearances of this property per subject
+* `subjs_with_mult_vals`: the number of subjects that have more than one repetition of this property
+
+```{r property_usage_overview_table}
+
+property_usage_stats |>
+  group_by(types) |>
+  group_walk(\(t,s) {
+    knitr::asis_output(glue::glue("## {s}")) |> print()
+    maybe_color <- \(x) if (t |> distinct(objs_per_rec) |> count() |> pull() == 1) x else x |> data_color(columns=objs_per_rec, palette="viridis", method="quantile", quantiles=8) # quantile has a bug when all same
+    t |>
+  arrange(desc(subjects)) |>
+  mutate(property = str_c('<a name="', property, '"></a>', property)) |>
+#  select(-c(name, description)) |>
+  gt() |>
+  fmt_number(where(is.numeric), decimals = 0) |>
+  fmt_percent(r_p, decimals = 2, drop_trailing_zeros = TRUE) |>
+  data_color(columns=r_p, palette="viridis") |>
+  fmt_number(objs_per_rec, decimals = 2, drop_trailing_zeros = TRUE) |>
+  maybe_color() |>
+  fmt_passthrough(property, escape=F) |> print()
+  })
+```
+
+```{r time_taken}
+end.time <- Sys.time()
+time.taken <- end.time - start.time
+#time.taken
+```
+

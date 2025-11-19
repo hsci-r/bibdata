@@ -1,6 +1,6 @@
 import glob
 import dagster as dg
-from dagster_assets.utils import download_file, get_date_from_file_modification_time, get_etag, get_parquet_glob_sha1sum, log_and_run, create_overview, run_bibxml2
+from dagster_assets.utils import create_rdf_overview, download_file, get_date_from_file_modification_time, get_date_from_last_modified_file, get_etag, get_parquet_glob_sha1sum, log_and_run, create_bib_overview, run_bibxml2
 
 work_dir = "data/work/dbnf"
 urls = dg.StaticPartitionsDefinition([ # from https://api.bnf.fr/index.php/fr/node/270
@@ -45,3 +45,14 @@ def dbnf_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     cmd = f"python src/process-ntriples.py -o {parquet_file} -p data/schema-info/lod_prefixes.tsv {' '.join(files)}"
     log_and_run(cmd, context)
     return get_parquet_glob_sha1sum(parquet_file)
+
+@dg.asset(deps=[dbnf_parquet], pool="overview")
+def dbnf_overview(context: dg.AssetExecutionContext):
+    create_rdf_overview(
+        context,
+        name="French National Library Linked Data",
+        data_glob=parquet_file,
+        date_modified=get_date_from_last_modified_file(work_dir + "/*.tar.gz"),
+        properties_file="data/schema-info/rdf_properties.tsv",
+        output_file="data/dbnf/dbnf-overview.html"
+    )

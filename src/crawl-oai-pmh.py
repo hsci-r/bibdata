@@ -94,7 +94,7 @@ def stream_oai_records(
     max_retries: int = DEFAULT_MAX_RETRIES,
     timeout: tuple[int, int] = DEFAULT_TIMEOUT,
 ) -> Iterator[str]:
-    stats: dict[str, int] = {'reqs': 0, 'deleted': 0, 'accepted': 0}
+    stats: dict[str, int] = {'reqs': 0, 'deleted': 0, 'skipped': 0, 'accepted': 0}
     resumption_token: Optional[str] = None
     closed_responses = 0
     with tqdm(unit="records", smoothing=0, total=None, leave=True, dynamic_ncols=True) as progress_bar:
@@ -125,6 +125,9 @@ def stream_oai_records(
                             continue
                         if _get_namespace(elem) != OAI_NAMESPACE:
                             logging.warning("Skipping element with unexpected namespace: %s", etree.tostring(elem))
+                            stats['skipped'] += 1
+                            progress_bar.set_postfix(stats, refresh=False)
+                            progress_bar.update(1)
                             continue
                         tag = _strip_tag(elem.tag)
                         if tag == 'record':

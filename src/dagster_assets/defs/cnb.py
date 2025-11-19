@@ -1,6 +1,6 @@
 
 import dagster as dg
-from dagster_assets.utils import get_etag, create_overview, download_file, run_bibxml2, get_date_from_last_modified_file
+from dagster_assets.utils import get_etag, create_bib_overview, download_file, run_bibxml2, get_date_from_last_modified_file
 
 source_url = "https://aleph.nkp.cz/data/cnb.xml.gz"
 work_file = "data/work/cnb.xml.gz"
@@ -20,7 +20,7 @@ def cnb_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
 
 @dg.asset(deps=[cnb_parquet], pool="overview")
 def cnb_overview(context: dg.AssetExecutionContext):
-    create_overview(
+    create_bib_overview(
         context,
         name="Czech National Bibliography",
         data_glob=parquet_file,

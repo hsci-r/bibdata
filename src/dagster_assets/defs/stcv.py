@@ -1,7 +1,7 @@
 
 
 import dagster as dg
-from dagster_assets.utils import download_file, get_date_from_file_modification_time, get_etag, log_and_run, create_overview, run_bibxml2
+from dagster_assets.utils import download_file, get_date_from_file_modification_time, get_etag, log_and_run, create_bib_overview, run_bibxml2
 
 source_url = "https://anet.be/opendata/stcv/stcv_marc.xml.gz"
 work_file = "data/work/stcv_marc.xml.gz"
@@ -21,7 +21,7 @@ def stcv_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
 
 @dg.asset(deps=[stcv_parquet], pool="overview")
 def stcv_overview(context: dg.AssetExecutionContext):
-    create_overview(
+    create_bib_overview(
         context,
         name="Bibliography of the Hand Press Books in Flanders",
         data_glob=parquet_file,

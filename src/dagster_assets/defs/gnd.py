@@ -1,7 +1,7 @@
 
 
 import dagster as dg
-from dagster_assets.utils import get_date_from_last_modified_file, get_etag, create_overview, download_file, run_bibxml2
+from dagster_assets.utils import get_date_from_last_modified_file, get_etag, create_bib_overview, download_file, run_bibxml2
 
 work_dir = "data/work/gnd"
 parquet_file = "data/gnd/gnd.parquet"
@@ -27,7 +27,7 @@ def gnd_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
 
 @dg.asset(deps=[gnd_parquet], pool="overview")
 def gnd_overview(context: dg.AssetExecutionContext):
-    create_overview(
+    create_bib_overview(
         context,
         name="German Integrated Authority File (Gemeinsame Normdatei)",
         data_glob=parquet_file,

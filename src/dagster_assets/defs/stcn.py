@@ -1,7 +1,7 @@
 
 
 import dagster as dg
-from dagster_assets.utils import get_date_from_file_modification_time, log_and_run, create_overview, run_bibxml2
+from dagster_assets.utils import get_date_from_file_modification_time, log_and_run, create_bib_overview, run_bibxml2
 
 work_file = "data/work/stcn.zip"
 parquet_file = "data/stcn/stcn.parquet"
@@ -17,7 +17,7 @@ def stcn_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
 
 @dg.asset(deps=[stcn_parquet], pool="overview")
 def stcn_overview(context: dg.AssetExecutionContext):
-    create_overview(
+    create_bib_overview(
         context,
         name="Short-Title Catalogue Netherlands",
         data_glob=parquet_file,

@@ -1,6 +1,6 @@
 
 import dagster as dg
-from dagster_assets.utils import get_date_from_last_modified_file, get_etag, log_and_run, create_overview, download_file, run_bibxml2
+from dagster_assets.utils import get_date_from_last_modified_file, get_etag, log_and_run, create_bib_overview, download_file, run_bibxml2
 
 source_url = "https://data.bn.org.pl/db/institutions/bibs-all.marc"
 work_dir = "data/work/plnb"
@@ -20,7 +20,7 @@ def plnb_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
 
 @dg.asset(deps=[plnb_parquet], pool="overview")
 def plnb_overview(context: dg.AssetExecutionContext):
-    create_overview(
+    create_bib_overview(
         context,
         name="Polish National Bibliography",
         data_glob=parquet_file,

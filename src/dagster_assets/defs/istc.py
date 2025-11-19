@@ -3,7 +3,7 @@
 import uuid
 import dagster as dg
 import requests
-from dagster_assets.utils import download_file, create_overview, get_date_from_last_modified_file, get_etag, get_parquet_glob_sha1sum, log_and_run
+from dagster_assets.utils import download_file, create_bib_overview, get_date_from_last_modified_file, get_etag, get_parquet_glob_sha1sum, log_and_run
 
 source_url =  "https://bl.iro.bl.uk/downloads/2b584243-64ee-49b5-ad69-5f7fb259cdf5?locale=en"
 work_file = "data/work/istc_clean_1.0.yaml"
@@ -26,7 +26,7 @@ def istc_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
 
 @dg.asset(deps=[istc_parquet], pool="overview")
 def istc_overview(context: dg.AssetExecutionContext):
-    create_overview(
+    create_bib_overview(
         context,
         name="Incunabula Short Title Catalogue",
         data_glob=parquet_file,

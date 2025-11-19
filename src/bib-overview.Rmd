@@ -52,7 +52,7 @@ if (is.null(getOption("arrow_duck_con"))) {
 con <- getOption("arrow_duck_con")
 
 DBI::dbExecute(con, "SET preserve_insertion_order = false;")
-DBI::dbExecute(con, "SET memory_limit = '64GB';")
+DBI::dbExecute(con, "SET memory_limit = '48GB';")
 
 files <- Sys.glob(params$dataset)
 dmtime <- if (params$date_modified!='') params$date_modified else strftime(fs::file_info(files[[1]])$modification_time,"%Y-%m-%d")

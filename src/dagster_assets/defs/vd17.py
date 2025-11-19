@@ -1,5 +1,5 @@
 import dagster as dg
-from dagster_assets.utils import get_date_from_file_modification_time, log_and_run, create_overview, run_bibxml2
+from dagster_assets.utils import get_date_from_file_modification_time, log_and_run, create_bib_overview, run_bibxml2
 
 work_dir = "data/work/vd17"
 parquet_file = "data/vd17/vd17.parquet"
@@ -22,7 +22,7 @@ def vd17_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
 
 @dg.asset(deps=[vd17_parquet], pool="overview")
 def vd17_overview(context: dg.AssetExecutionContext):
-    create_overview(
+    create_bib_overview(
         context,
         name="VD17",
         data_glob=parquet_file,

@@ -1,6 +1,6 @@
 
 import dagster as dg
-from dagster_assets.utils import get_date_from_last_modified_file, get_etag, create_overview, download_file, run_bibxml2
+from dagster_assets.utils import get_date_from_last_modified_file, get_etag, create_bib_overview, download_file, run_bibxml2
 
 source_url = "https://opendata.bnportugal.gov.pt/docs/catalogo.marcxchange.zip"
 work_file = "data/work/ptnb/catalogo.marcxchange.zip"
@@ -21,7 +21,7 @@ def ptnb_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
 
 @dg.asset(deps=[ptnb_parquet], pool="overview")
 def ptnb_overview(context: dg.AssetExecutionContext):
-    create_overview(
+    create_bib_overview(
         context,
         name="Portuguese National Bibliography",
         data_glob=parquet_file,

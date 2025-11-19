@@ -1,7 +1,7 @@
 
 
 import dagster as dg
-from dagster_assets.utils import get_etag, create_overview, download_file, run_bibxml2, get_date_from_last_modified_file
+from dagster_assets.utils import get_etag, create_bib_overview, download_file, run_bibxml2, get_date_from_last_modified_file
 
 work_dir = "data/work/dnb"
 parquet_file = "data/dnb/dnb.parquet"
@@ -27,7 +27,7 @@ def dnb_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
 
 @dg.asset(deps=[dnb_parquet], pool="overview")
 def dnb_overview(context: dg.AssetExecutionContext):
-    create_overview(
+    create_bib_overview(
         context,
         name="German National Bibliography",
         data_glob=parquet_file,

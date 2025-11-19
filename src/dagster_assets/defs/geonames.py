@@ -1,6 +1,6 @@
 
 import dagster as dg
-from dagster_assets.utils import get_etag, create_overview, download_file, get_parquet_glob_sha1sum, log_and_run, run_bibxml2, get_date_from_last_modified_file
+from dagster_assets.utils import get_etag, create_bib_overview, download_file, get_parquet_glob_sha1sum, log_and_run, run_bibxml2, get_date_from_last_modified_file
 
 source_url = "https://download.geonames.org/export/dump/allCountries.zip"
 work_file = "data/work/geonames/allCountries.zip"
