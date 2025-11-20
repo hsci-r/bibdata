@@ -5,15 +5,16 @@ import re
 from typing import cast
 import click
 import humanize
+from tqdm import tqdm
 
 @click.command()
 def create_index():
     with open("data/index.html", "wt") as f:
         f.write("<html><body><h1>Index</h1><ul>")
-        for file in glob.glob("data/*/*-overview.html"):
+        for file in tqdm(glob.glob("data/*/*-overview.html")):
             with open(file, "rt") as inf:
                 content = inf.read()
-                title = re.search(r"<title>.*?Composition Analysis of the (.*?)</title>", content, re.DOTALL)
+                title = re.search(r"<title>.*?Composition Analysis of (.*?)</title>", content, re.DOTALL)
             name = cast(re.Match, title).group(1).strip()
             f.write(f"<li><a href='{Path(file).relative_to('data')}'>{name}</a></li>\n")
 #            with open(Path(file).parent / "index.html", "wt") as index_file:
