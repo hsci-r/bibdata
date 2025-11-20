@@ -1,5 +1,6 @@
 
 import dagster as dg
+from hereutil import here
 from dagster_assets.utils import get_etag, create_bib_overview, download_file, get_parquet_glob_sha1sum, log_and_run, run_bibxml2, get_date_from_last_modified_file
 
 source_url = "https://download.geonames.org/export/dump/allCountries.zip"
@@ -29,3 +30,8 @@ def geonames_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     cmd = f"python src/process-geonames.py"
     log_and_run(cmd, context)
     return get_parquet_glob_sha1sum(parquet_file)
+
+@dg.asset(deps=[geonames_parquet], pool="overview")
+def geonames_overview(context: dg.AssetExecutionContext):
+    cmd = f"Rscript -e \"rmarkdown::render('src/geonames-overview.Rmd', output_file = '../data/geonames/geonames-overview.html')\""
+    log_and_run(cmd, context)

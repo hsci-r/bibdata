@@ -1,0 +1,194 @@
+---
+params:
+  date_modified: ''
+output:
+  html_document:
+    toc: yes
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1500px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+
+```{r setup, echo=F, warning=F, error=F, include=F}
+knitr::opts_chunk$set(echo=F, warning=F, error=F)
+library(here)
+start.time <- Sys.time()
+library(tidyverse)
+library(gt)
+library(glue)
+library(gghsci)
+library(ggplot2)
+library(arrow)
+
+p <- scales::label_number()
+pp <- scales::label_percent()
+if (is.null(getOption("arrow_duck_con"))) {
+  options(
+    arrow_duck_con = DBI::dbConnect(
+      duckdb::duckdb(bigint = "integer64"),
+      bigint = "integer64",
+      dbdir = str_c(tempdir(), "/duckdb")
+    )
+  )
+}
+con <- getOption("arrow_duck_con")
+
+DBI::dbExecute(con, "SET preserve_insertion_order = false;")
+DBI::dbExecute(con, "SET memory_limit = '48GB';")
+
+files <- Sys.glob(here("data/geonames/*.parquet"))
+dmtime <- if (params$date_modified!='') params$date_modified else strftime(fs::file_info(files[[1]])$modification_time,"%Y-%m-%d")
+
+duckdb_open_parquet <- function(glob, db_connection=getOption("arrow_duck_con")) {
+  tbl(db_connection, glue::glue("read_parquet('{glob}')"))
+}
+
+d <- duckdb_open_parquet(here("data/geonames/geonames*.parquet"))
+dl <- d |> 
+  pivot_longer(c(everything(), -geonameid), names_to="field") |>
+  filter(!is.na(value))
+  
+and <- duckdb_open_parquet(here("data/geonames/alternate_names*.parquet"))
+andl <- and |> 
+  pivot_longer(c(everything(), -geonameid), names_to="field") |>
+  filter(!is.na(value))
+
+db_sample <- function(table, percent) {
+  tbl(con, sql(glue::glue("{dbplyr::sql_render(table)} USING SAMPLE {percent}%")))
+}
+
+unit_print <- function(n) {
+  return(case_when(
+    n < 1000 ~ paste0(n, "B"),
+    n < 1000000 ~ paste0(n / 1000, "KB"),
+    n < 1000000000 ~ paste0(n / 1000000, "MB"),
+    n < 1000000000000 ~ paste0(n / 1000000000, "GB"),
+    n < 1000000000000000 ~ paste0(n / 1000000000000, "TB"),
+    n < 1000000000000000000 ~ paste0(n / 1000000000000000, "PB"),
+    TRUE ~ paste0(n / 1000000000000000000, "EB")))
+}
+
+n_geonames <- d |> distinct(geonameid) |> count() |> pull() |> as.integer()
+```
+
+---
+title: Composition Analysis of GeoNames dated `r dmtime`
+---
+
+# Overall summary
+
+`r p(d |> count() |> pull() |> as.integer())` places and `r p(and |> count() |> pull() |> as.integer())` alternate names in total. Constituent files:
+
+```{r filelist, results = 'asis'}
+cat("\n\n")
+for (file in files[order(files |> str_replace(".parquet", ""))]) {
+  unit_size <- unit_print(fs::file_info(file)$size)
+  cat(glue::glue("- {file} ({unit_size})\n"))
+}
+cat("\n")
+```
+
+# Field usage overview
+
+```{r field_usage_overview_data}
+get_field_usage_stats <- function(dl, id_col) {
+  field_example_vals <- dl |>
+    count(field, value) |>
+    group_by(field) |>
+    slice_sample(n = 7) |>
+    summarise(e_vals = str_flatten(str_c(value, ' (', format('{:t,}',n), ')'), collapse = "|"), .groups = "drop") |>
+  #  union_all(subproperty_example_vals) |>
+    collect()
+  
+  field_dist_vals <- dl |>
+    group_by(field) |>
+    summarise(dist_vals=n_distinct(value), .groups="drop") |>
+    collect()
+  
+  field_usage_stats <- dl |>
+    group_by(field) |>
+    summarise(geonames = n_distinct(geonameid), n = n(), .groups = "drop") |>
+    mutate(r_p = geonames / n_geonames) |>
+    mutate(vals_per_rec = n / geonames) |>
+    collect() |>
+    left_join(
+      dl |>
+        count(geonameid, field) |>
+        filter(n > 1L) |>
+        ungroup() |>
+        count(field, name = "geonames_with_mult_vals") |>
+        collect(),
+      join_by(field)
+    ) |>
+    replace_na(list(geonames_with_mult_vals = 0)) |>
+    left_join(field_dist_vals, join_by(field)) |>
+    left_join(field_example_vals, join_by(field)) |>
+    relocate(field, geonames, r_p, dist_vals, e_vals) |>
+    arrange(desc(geonames)) |>
+    mutate(across(where(bit64::is.integer64), as.integer))
+  rm(field_example_vals, field_dist_vals)
+  field_usage_stats
+}
+field_usage_stats <- get_field_usage_stats(dl)
+and_field_usage_stats <- get_field_usage_stats(andl)
+```
+
+Legend for the tables below:
+
+* `geonames`: how many geonames have at least one of this field
+* `r_p`: the above as a percentage of all geonames
+* `dist_objs`: the number of different values appearing in this field
+* `e_objs`: at most seven random sample values of this field
+* `n`: the total number of appearances of this field
+* `objs_per_rec`: calculated from the above, the mean number of appearances of this field per geoname
+* `subjs_with_mult_vals`: the number of geonames that have more than one repetition of this field
+
+In total, `r field_usage_stats |> distinct(field) |> count() |> pull(n) |> as.integer() |> p()` distinct fields are used.
+
+## Main table
+
+```{r field_usage_overview_table}
+#maybe_color <- \(x) if (field_usage_stats |> distinct(vals_per_rec) |> count() |> pull() == 1) x else x |> data_color(columns=vals_per_rec, palette="viridis", method="quantile", quantiles=8) # quantile has a bug when all same
+field_usage_stats |>
+  select(-c(vals_per_rec,geonames_with_mult_vals)) |>
+  mutate(field = str_c('<a name="', field, '"></a>', field)) |>
+#  select(-c(name, description)) |>
+  gt() |>
+  fmt_number(where(is.numeric), decimals = 0) |>
+  fmt_percent(r_p, decimals = 2, drop_trailing_zeros = TRUE) |>
+  data_color(columns=r_p, palette="viridis") |>
+#  fmt_number(vals_per_rec, decimals = 2, drop_trailing_zeros = TRUE) |>
+  #maybe_color() |>
+  fmt_passthrough(field, escape=F)
+```
+
+## Alternate names table
+
+In total, `r and_field_usage_stats |> distinct(field) |> count() |> pull(n) |> as.integer() |> p()` distinct fields are used.
+
+```{r and_field_usage_overview_table}
+and_field_usage_stats |>
+  mutate(field = str_c('<a name="', field, '"></a>', field)) |>
+#  select(-c(name, description)) |>
+  gt() |>
+  fmt_number(where(is.numeric), decimals = 0) |>
+  fmt_percent(r_p, decimals = 2, drop_trailing_zeros = TRUE) |>
+  data_color(columns=r_p, palette="viridis") |>
+  data_color(columns=vals_per_rec, palette="viridis", method="quantile", quantiles=8) |>
+  fmt_number(vals_per_rec, decimals = 2, drop_trailing_zeros = TRUE) |>
+  fmt_passthrough(field, escape=F)
+```
+
+```{r time_taken}
+end.time <- Sys.time()
+time.taken <- end.time - start.time
+#time.taken
+```
+
+Generation time: `r time.taken`

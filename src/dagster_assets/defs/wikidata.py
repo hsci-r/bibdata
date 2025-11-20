@@ -1,5 +1,6 @@
 import os
 import dagster as dg
+from hereutil import here
 from dagster_assets.utils import create_bib_overview, get_parquet_glob_sha1sum, log_and_run, run_bibxml2, get_etag, download_file
 
 source_url = "https://dumps.wikimedia.org/wikidatawiki/entities/latest-all.json.bz2"
@@ -23,3 +24,7 @@ def wikidata_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     log_and_run(f"lbzcat -n {lbzcat_processors} {input_file} | pv -r -a -m 3600 -s 118704633 -p -b -l -e -t -v | target/release/process-wikidata -b 16384 -t {process_processors} -o {work_dir}", context)
     return get_parquet_glob_sha1sum("data/wikidata/.parquet")
     
+@dg.asset(deps=[wikidata_parquet], pool="overview")
+def wikidata_overview(context: dg.AssetExecutionContext):
+    cmd = f"Rscript -e \"rmarkdown::render('src/wikidata-overview.Rmd', output_file = '../data/wikidata/wikidata-overview.html')\""
+    log_and_run(cmd, context)

@@ -136,7 +136,7 @@ property_example_objs <- d |>
   count(types, property, object) |>
   group_by(types, property) |>
   slice_sample(n = 7) |>
-  summarise(e_objs = str_flatten(str_c(object, ' (', n, ')'), collapse = "|"), .groups = "drop") |>
+  summarise(e_objs = str_flatten(str_c(object, ' (', format('{:t,}',n), ')'), collapse = "|"), .groups = "drop") |>
 #  union_all(subproperty_example_vals) |>
   collect()
 

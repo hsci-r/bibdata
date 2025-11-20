@@ -130,7 +130,7 @@ def process_geonames():
             batch.append((
                 int(row[0]),  # alternate_name_id
                 int(row[1]),  # geonameid
-                row[2],  # isolanguage
+                row[2] if row[2] else None,  # isolanguage
                 row[3],  # alternate_name
                 row[4] == '1',  # is_preferred_name
                 row[5] == '1',  # is_short_name

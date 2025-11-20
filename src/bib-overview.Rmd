@@ -227,7 +227,7 @@ subfield_code_example_vals <- d |>
   count(field_code, subfield_code, value) |>
   group_by(field_code, subfield_code) |>
   slice_sample(n = 7) |>
-  summarise(e_vals = str_flatten(str_c(value, ' (', n, ')'), collapse = "|"), .groups = "drop") |>
+  summarise(e_vals = str_flatten(str_c(value, ' (', format('{:t,}',n), ')'), collapse = "|"), .groups = "drop") |>
 #  union_all(subfield_code_example_vals) |>
   collect()
 
