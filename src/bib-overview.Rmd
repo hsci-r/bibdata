@@ -93,7 +93,7 @@ n_records <- d |> distinct(record_number) |> count() |> pull() |> as.integer()
 ```
 
 ---
-title: Composition Analysis of the `r params$dataset_name` dated `r dmtime`
+title: Composition Analysis of `r params$dataset_name` dated `r dmtime`
 ---
 
 # Overall summary
@@ -101,12 +101,11 @@ title: Composition Analysis of the `r params$dataset_name` dated `r dmtime`
 `r p(n_records)` records and `r p(d |> count() |> pull() |> as.integer())` attribute values in total. Constituent files:
 
 ```{r filelist, results = 'asis'}
-
 cat("\n\n")
-for (file in files[order(files |> str_replace(".parquet", ""))]) {
-  unit_size <- unit_print(fs::file_info(file)$size)
-  cat(glue::glue("- {file} ({unit_size})\n"))
-}
+files[order(files |> str_replace(".parquet", ""))] |> 
+  map(\(file) glue::glue("- {file} ({unit_print(fs::file_info(file)$size)})")) |>
+  str_flatten(collapse="\n") |>
+  cat()
 cat("\n")
 ```
 

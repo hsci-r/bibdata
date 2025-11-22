@@ -50,12 +50,21 @@ duckdb_open_parquet <- function(glob, db_connection=getOption("arrow_duck_con"))
 }
 
 list.files(here("data/wikidata/")) |> 
+  keep(\(s) s|> str_detect(".parquet")) |>
   str_replace("(_[0-9])*\\.parquet","") |> 
   unique() |>
   walk(\(name) .GlobalEnv[[str_c('wd_',name |> str_replace_all("-","_"))]] <- tbl(con, glue::glue("read_parquet('{here('data/wikidata')}/{name}*.parquet')")))
 
 db_sample <- function(table, percent) {
   tbl(con, sql(glue::glue("{dbplyr::sql_render(table)} USING SAMPLE {percent}%")))
+}
+
+kc <- function(content) {
+  cat(sep = "\n", knitr::knit_child(quiet = TRUE, text = c(
+    "```{r}",
+    "content",
+    "```"
+  ), envir=environment()))
 }
 
 unit_print <- function(n) {
@@ -192,10 +201,10 @@ title: Composition Analysis of Wikidata dated `r dmtime`
 
 ```{r filelist, results = 'asis'}
 cat("\n\n")
-for (file in files[order(files |> str_replace(".parquet", ""))]) {
-  unit_size <- unit_print(fs::file_info(file)$size)
-  cat(glue::glue("- {file} ({unit_size})\n"))
-}
+files[order(files |> str_replace(".parquet", ""))] |> 
+  map(\(file) glue::glue("- {file} ({unit_print(fs::file_info(file)$size)})")) |>
+  str_flatten(collapse="\n") |>
+  cat()
 cat("\n")
 ```
 
@@ -211,10 +220,10 @@ Legend for the tables below:
 * `vals_per_subj`: calculated from the above, the mean number of appearances of this property + field per subject
 * `subjs_with_mult_vals`: the number of subjects that have more than one repetition of this property + field
 
-```{r field_usage_overviews}
+```{r field_usage_overviews, results='asis'}
 classes_of_interest |>
   walk(\(class) {
-    print(knitr::asis_output(glue::glue("## {wd_coreinfo |> filter(entity_id==class) |> pull(label)}")))
+    glue::glue("\n\n## {wd_coreinfo |> filter(entity_id==class) |> pull(label)}\n\n") |> cat()
 
     type_instances <- wd_transitive_types(class) |>
       inner_join(wd_claim_wikibase_entityid |> filter(property_id==p_instance_of), join_by(value_entity_id)) |>
@@ -239,7 +248,7 @@ classes_of_interest |>
     ) |>
       reduce(union_all) |>
       arrange(desc(subjects), property, field)
-    print(knitr::asis_output(glue::glue("In total, {property_usage_stats |> distinct(property) |> count() |> pull(n) |> as.integer() |> p()} distinct properties are used.")))
+    glue::glue("In total, {property_usage_stats |> distinct(property) |> count() |> pull(n) |> as.integer() |> p()} distinct properties are used.") |> cat()
     property_usage_stats |>
       filter(subjects>n_type_instances/100/2) |>
 #  mutate(property = str_c('<a name="', property, '"></a>', property)) |>
@@ -251,7 +260,7 @@ classes_of_interest |>
     #  fmt_number(vals_per_rec, decimals = 2, drop_trailing_zeros = TRUE) |>
       #maybe_color() |>
       fmt_passthrough(property, escape=F) |>
-      print()
+      kc()
   })
 #maybe_color <- \(x) if (field_usage_stats |> distinct(vals_per_rec) |> count() |> pull() == 1) x else x |> data_color(columns=vals_per_rec, palette="viridis", method="quantile", quantiles=8) # quantile has a bug when all same
 ```

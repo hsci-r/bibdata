@@ -83,10 +83,10 @@ title: Composition Analysis of ISNI dated `r dmtime`
 
 ```{r filelist, results = 'asis'}
 cat("\n\n")
-for (file in files[order(files |> str_replace(".parquet", ""))]) {
-  unit_size <- unit_print(fs::file_info(file)$size)
-  cat(glue::glue("- {file} ({unit_size})\n"))
-}
+files[order(files |> str_replace(".parquet", ""))] |> 
+  map(\(file) glue::glue("- {file} ({unit_print(fs::file_info(file)$size)})")) |>
+  str_flatten(collapse="\n") |>
+  cat()
 cat("\n")
 ```
 

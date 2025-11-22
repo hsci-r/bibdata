@@ -78,6 +78,14 @@ unit_print <- function(n) {
     TRUE ~ paste0(n / 1000000000000000000, "EB")))
 }
 
+kc <- function(content) {
+  cat(sep = "\n", knitr::knit_child(quiet = TRUE, text = c(
+    "```{r}",
+    "content",
+    "```"
+  ), envir=environment()))
+}
+
 types <- d |> 
   filter(property=="rdf:type") |> 
   group_by(subject) |> 
@@ -91,7 +99,7 @@ subjects <- d |>
 ```
 
 ---
-title: Composition Analysis of the `r params$dataset_name` dated `r dmtime`
+title: Composition Analysis of `r params$dataset_name` dated `r dmtime`
 ---
 
 # Overall summary
@@ -99,12 +107,11 @@ title: Composition Analysis of the `r params$dataset_name` dated `r dmtime`
 `r p(subjects |> count() |> pull() |> as.integer())` subjects and `r p(d |> count() |> pull() |> as.integer())` triples in total. Constituent files:
 
 ```{r filelist, results = 'asis'}
-
 cat("\n\n")
-for (file in files[order(files |> str_replace(".parquet", ""))]) {
-  unit_size <- unit_print(fs::file_info(file)$size)
-  cat(glue::glue("- {file} ({unit_size})\n"))
-}
+files[order(files |> str_replace(".parquet", ""))] |> 
+  map(\(file) glue::glue("- {file} ({unit_print(fs::file_info(file)$size)})")) |>
+  str_flatten(collapse="\n") |>
+  cat()
 cat("\n")
 ```
 
@@ -170,7 +177,7 @@ property_usage_stats <- d |>
   left_join(property_example_objs, join_by(types, property)) |>
   left_join(property_descriptions, join_by(property)) |>
   relocate(property, description, subjects, r_p, dist_objs, e_objs) |>
-  arrange(property) |>
+  arrange(desc(n_subjects)) |>
   mutate(across(where(bit64::is.integer64), as.integer))
 
 rm(property_example_objs, property_dist_objs)
@@ -188,24 +195,27 @@ Legend for the tables below:
 * `objs_per_rec`: calculated from the above, the mean number of appearances of this property per subject
 * `subjs_with_mult_vals`: the number of subjects that have more than one repetition of this property
 
-```{r property_usage_overview_table}
+```{r property_usage_overview_table, results='asis'}
 
 property_usage_stats |>
   group_by(types) |>
   group_walk(\(t,s) {
-    knitr::asis_output(glue::glue("## {s}")) |> print()
+    n_subjects <- t |> summarise(first(n_subjects)) |> pull()
+    t <- t |> select(-n_subjects)
+    glue::glue("\n\n## {s} ({p(n_subjects)})\n\n") |> cat()
     maybe_color <- \(x) if (t |> distinct(objs_per_rec) |> count() |> pull() == 1) x else x |> data_color(columns=objs_per_rec, palette="viridis", method="quantile", quantiles=8) # quantile has a bug when all same
     t |>
-  arrange(desc(subjects)) |>
-  mutate(property = str_c('<a name="', property, '"></a>', property)) |>
-#  select(-c(name, description)) |>
-  gt() |>
-  fmt_number(where(is.numeric), decimals = 0) |>
-  fmt_percent(r_p, decimals = 2, drop_trailing_zeros = TRUE) |>
-  data_color(columns=r_p, palette="viridis") |>
-  fmt_number(objs_per_rec, decimals = 2, drop_trailing_zeros = TRUE) |>
-  maybe_color() |>
-  fmt_passthrough(property, escape=F) |> print()
+      arrange(desc(subjects)) |>
+      mutate(property = str_c('<a name="', property, '"></a>', property)) |>
+    #  select(-c(name, description)) |>
+      gt() |>
+      fmt_number(where(is.numeric), decimals = 0) |>
+      fmt_percent(r_p, decimals = 2, drop_trailing_zeros = TRUE) |>
+      data_color(columns=r_p, palette="viridis") |>
+      fmt_number(objs_per_rec, decimals = 2, drop_trailing_zeros = TRUE) |>
+      maybe_color() |>
+      fmt_passthrough(property, escape=F) |> 
+      kc()
   })
 ```
 
