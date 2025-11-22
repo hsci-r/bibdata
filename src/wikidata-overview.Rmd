@@ -1,0 +1,265 @@
+---
+params:
+  date_modified: ''
+output:
+  html_document:
+    toc: yes
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1500px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+
+```{r setup, echo=F, warning=F, error=F, include=F}
+knitr::opts_chunk$set(echo=F, warning=F, error=F)
+library(here)
+start.time <- Sys.time()
+library(tidyverse)
+library(gt)
+library(glue)
+library(gghsci)
+library(ggplot2)
+library(arrow)
+
+p <- scales::label_number()
+pp <- scales::label_percent()
+if (is.null(getOption("arrow_duck_con"))) {
+  options(
+    arrow_duck_con = DBI::dbConnect(
+      duckdb::duckdb(bigint = "integer64"),
+      bigint = "integer64",
+      dbdir = str_c(tempdir(), "/duckdb")
+    )
+  )
+}
+con <- getOption("arrow_duck_con")
+
+DBI::dbExecute(con, "SET preserve_insertion_order = false;")
+DBI::dbExecute(con, "SET memory_limit = '48GB';")
+
+files <- Sys.glob(here("data/wikidata/*.parquet"))
+dmtime <- if (params$date_modified!='') params$date_modified else strftime(fs::file_info(files[[1]])$modification_time,"%Y-%m-%d")
+
+duckdb_open_parquet <- function(glob, db_connection=getOption("arrow_duck_con")) {
+  tbl(db_connection, glue::glue("read_parquet('{glob}')"))
+}
+
+list.files(here("data/wikidata/")) |> 
+  str_replace("(_[0-9])*\\.parquet","") |> 
+  unique() |>
+  walk(\(name) .GlobalEnv[[str_c('wd_',name |> str_replace_all("-","_"))]] <- tbl(con, glue::glue("read_parquet('{here('data/wikidata')}/{name}*.parquet')")))
+
+db_sample <- function(table, percent) {
+  tbl(con, sql(glue::glue("{dbplyr::sql_render(table)} USING SAMPLE {percent}%")))
+}
+
+unit_print <- function(n) {
+  return(case_when(
+    n < 1000 ~ paste0(n, "B"),
+    n < 1000000 ~ paste0(n / 1000, "KB"),
+    n < 1000000000 ~ paste0(n / 1000000, "MB"),
+    n < 1000000000000 ~ paste0(n / 1000000000, "GB"),
+    n < 1000000000000000 ~ paste0(n / 1000000000000, "TB"),
+    n < 1000000000000000000 ~ paste0(n / 1000000000000000, "PB"),
+    TRUE ~ paste0(n / 1000000000000000000, "EB")))
+}
+
+p_instance_of <- wd_entities |> filter(id=="P31") |> pull(entity_id)
+p_subclass_of <- wd_entities |> filter(id=="P279") |> pull(entity_id)
+
+classes_of_interest <- list(human="Q5",corporate_body="Q106668099",written_work="Q47461344",edition="Q3331189") |> #work="Q386724"
+  map(\(c_id) wd_entities |> filter(id==c_id) |> pull(entity_id))
+  #organisation="Q43229",edition="Q3331189")#literary_work="Q7725634",written_work="Q47461344",film="Q11424",painting="Q3305213",human_settlement="Q486972")
+#n_geonames <- d |> distinct(geonameid) |> count() |> pull() |> as.integer()
+```
+
+```{r}
+wd_coreinfo <- wd_entities |>
+  left_join(
+    wd_labels |> 
+      filter(language=="en") |>
+      union_all(
+        wd_labels |> 
+          anti_join(wd_labels |> filter(language=="en"), join_by(entity_id)) |>
+          group_by(entity_id) |>
+          summarise(label=first(label))
+      ),
+    join_by(entity_id)
+  ) |>
+  transmute(entity_id, label=str_c(label, " (",id,")")) |>
+  compute()
+```
+
+```{r}
+wd_transitive_types <- function(class) {
+  tbl(
+    con,
+    sql(glue::glue(
+      "
+  WITH RECURSIVE recursive_types AS (
+    SELECT {class} AS type_entity_id
+    UNION
+    SELECT entity_id AS type_entity_id
+    FROM ({dbplyr::sql_render(wd_claim_wikibase_entityid)})
+    WHERE property_id == {p_subclass_of} AND rank!='deprecated' AND value_entity_id={class}
+    UNION
+    SELECT o.entity_id AS type_entity_id
+    FROM recursive_types t, ({dbplyr::sql_render(wd_claim_wikibase_entityid)}) o
+    WHERE o.property_id == {p_subclass_of} AND rank!='deprecated' AND t.type_entity_id == o.value_entity_id 
+  )
+  SELECT type_entity_id AS value_entity_id FROM recursive_types"
+    ))
+  )
+}
+```
+
+```{r}
+get_property_example_vals <- function(type_instances, claim_table, field) {
+  field_name <- as_label(enquo(field))
+  ret <- type_instances |>
+    inner_join(claim_table, join_by(entity_id)) |>
+    count(property_id, value={{field}}) |>
+    group_by(property_id) |>
+    slice_sample(n = 7)
+  if (field_name |> str_ends("_id")) ret <- ret |>
+    left_join(wd_coreinfo, join_by(value==entity_id)) |>
+    mutate(value=label) |>
+    select(-label)
+  ret |>
+    summarise(e_vals = str_flatten(str_c(value, ' (', format('{:t,}',n), ')'), collapse = "|"), .groups = "drop") |>
+    collect()
+}
+
+get_property_dist_vals <- function(type_instances, claim_table, field) {
+  type_instances |>
+    inner_join(claim_table, join_by(entity_id)) |>
+    group_by(property_id) |>
+    summarise(dist_vals=n_distinct({{field}}), .groups="drop") |>
+    collect()
+}
+
+get_property_usage_stats <- function(type_instances, n_instances, claim_table, field) {
+  field_name <- as_label(enquo(field))
+  type_instances |>
+    inner_join(claim_table, join_by(entity_id)) |>
+    group_by(property_id) |>
+    summarise(subjects = n_distinct(entity_id), n = n(), .groups = "drop") |>
+    mutate(r_p = subjects / n_instances) |>
+    mutate(vals_per_subj = n / subjects) |>
+    collect() |>
+    left_join(
+      type_instances |>
+        inner_join(claim_table, join_by(entity_id)) |>
+        count(entity_id, property_id) |>
+        filter(n > 1L) |>
+        ungroup() |>
+        count(property_id, name = "subjs_with_mult_vals") |>
+        collect(),
+      join_by(property_id)
+    ) |>
+    replace_na(list(subjs_with_mult_vals = 0)) |>
+    left_join(get_property_dist_vals(type_instances, claim_table, {{field}}), join_by(property_id)) |>
+    left_join(get_property_example_vals(type_instances, claim_table, {{field}}), join_by(property_id)) |>
+    left_join(
+      type_instances |>
+        inner_join(claim_table, join_by(entity_id)) |>
+        distinct(property_id) |>
+        left_join(wd_coreinfo |> 
+          select(property_id=entity_id, property=label),
+          join_by(property_id)
+        ) |>
+        collect()
+      , join_by(property_id)) |>
+    select(-property_id) |>
+    mutate(field=field_name) |>
+    relocate(property, field, subjects, r_p, dist_vals, e_vals) |>
+    mutate(across(where(bit64::is.integer64), as.integer))
+}
+```
+
+---
+title: Composition Analysis of Wikidata dated `r dmtime`
+---
+
+# Overall summary
+
+`r p(wd_coreinfo |> count() |> pull() |> as.integer())` entities in total. Constituent files:
+
+```{r filelist, results = 'asis'}
+cat("\n\n")
+for (file in files[order(files |> str_replace(".parquet", ""))]) {
+  unit_size <- unit_print(fs::file_info(file)$size)
+  cat(glue::glue("- {file} ({unit_size})\n"))
+}
+cat("\n")
+```
+
+# Field usage overview
+
+Legend for the tables below:
+
+* `subjects`: how many subjects have at least one of this property
+* `r_p`: the above as a percentage of all subjects
+* `dist_vals`: the number of different values appearing in this property + field
+* `e_vals`: at most seven random sample values of this property + field
+* `n`: the total number of appearances of this property + field
+* `vals_per_subj`: calculated from the above, the mean number of appearances of this property + field per subject
+* `subjs_with_mult_vals`: the number of subjects that have more than one repetition of this property + field
+
+```{r field_usage_overviews}
+classes_of_interest |>
+  walk(\(class) {
+    print(knitr::asis_output(glue::glue("## {wd_coreinfo |> filter(entity_id==class) |> pull(label)}")))
+
+    type_instances <- wd_transitive_types(class) |>
+      inner_join(wd_claim_wikibase_entityid |> filter(property_id==p_instance_of), join_by(value_entity_id)) |>
+      distinct(entity_id) |>
+      compute()
+
+    n_type_instances <- type_instances |> count() |> pull()
+
+    property_usage_stats <- list(
+      get_property_usage_stats(type_instances, n_type_instances, wd_claim_globecoordinate, precision),
+      get_property_usage_stats(type_instances, n_type_instances, wd_claim_globecoordinate, globe_entity_id),
+      get_property_usage_stats(type_instances, n_type_instances, wd_claim_monolingualtext, language),
+      get_property_usage_stats(type_instances, n_type_instances, wd_claim_monolingualtext |> mutate(language_text=str_c(language,": ", text)), language_text),
+      get_property_usage_stats(type_instances, n_type_instances, wd_claim_string, value),
+      get_property_usage_stats(type_instances, n_type_instances, wd_claim_wikibase_entityid, value_entity_id),
+      get_property_usage_stats(type_instances, n_type_instances, wd_claim_time, timezone),
+      get_property_usage_stats(type_instances, n_type_instances, wd_claim_time, before),
+      get_property_usage_stats(type_instances, n_type_instances, wd_claim_time, after),
+      get_property_usage_stats(type_instances, n_type_instances, wd_claim_time, precision),
+      get_property_usage_stats(type_instances, n_type_instances, wd_claim_time, calendarmodel_entity_id),
+      get_property_usage_stats(type_instances, n_type_instances, wd_claim_time, time)
+    ) |>
+      reduce(union_all) |>
+      arrange(desc(subjects), property, field)
+    print(knitr::asis_output(glue::glue("In total, {property_usage_stats |> distinct(property) |> count() |> pull(n) |> as.integer() |> p()} distinct properties are used.")))
+    property_usage_stats |>
+      filter(subjects>n_type_instances/100/2) |>
+#  mutate(property = str_c('<a name="', property, '"></a>', property)) |>
+#  select(-c(name, description)) |>
+      gt() |>
+      fmt_number(where(is.numeric), decimals = 0) |>
+      fmt_percent(r_p, decimals = 2, drop_trailing_zeros = TRUE) |>
+      data_color(columns=r_p, palette="viridis") |>
+    #  fmt_number(vals_per_rec, decimals = 2, drop_trailing_zeros = TRUE) |>
+      #maybe_color() |>
+      fmt_passthrough(property, escape=F) |>
+      print()
+  })
+#maybe_color <- \(x) if (field_usage_stats |> distinct(vals_per_rec) |> count() |> pull() == 1) x else x |> data_color(columns=vals_per_rec, palette="viridis", method="quantile", quantiles=8) # quantile has a bug when all same
+```
+
+```{r time_taken}
+end.time <- Sys.time()
+time.taken <- end.time - start.time
+#time.taken
+```
+
+Generation time: `r time.taken`
