@@ -18,6 +18,8 @@ def kbnl_crawl(context: dg.AssetExecutionContext):
 @dg.asset(deps=[kbnl_crawl], pool="parquet")
 def kbnl_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     return run_bibxml2(context, parquet_file, f"{work_dir}/*.mrcx.zst", 'pica')
+    #return run_bibxml2(context, parquet_file, f"{work_dir}.mrcx.gz", 'pica')
+    
 
 
 @dg.asset(deps=[kbnl_parquet], pool="overview")

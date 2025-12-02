@@ -9,19 +9,14 @@ import requests
 from xml.etree import ElementTree
 from lxml import etree  # pyright: ignore[reportAttributeAccessIssue]
 from requests import HTTPError, Response
-from requests.exceptions import RequestException
+from requests.exceptions import RequestException, ConnectionError
 from tqdm import tqdm
 
-DEFAULT_MAX_RETRIES = 20
+DEFAULT_MAX_RETRIES = 15
 DEFAULT_TIMEOUT = (600, 600)
-BACKOFF_SECONDS = 60
+BACKOFF_SECONDS = (0,0,0,0,0,1,5,10,30,0,0,0,0,0,60,0,0,0,0,0)
 CHUNK_SIZE = 128 * 1024
 OAI_NAMESPACE = "http://www.openarchives.org/OAI/2.0/"
-
-
-class OAINoRecordsMatch(RuntimeError):
-    """Raised when the server responds with a noRecordsMatch error."""
-
 
 def _strip_namespaces(doc: etree._Element) -> None:
     """Remove all namespaces from an lxml element tree."""
@@ -66,20 +61,19 @@ def _request_with_retry(
     max_retries: int,
     timeout: tuple[int, int],
 ) -> Response:
-    last_exc: Optional[Exception] = None
-    for attempt in range(max_retries):
+    sleep_times = [sleep_time for i in range(max_retries) for sleep_time in (BACKOFF_SECONDS + (2**i,))]
+    max_retries = len(sleep_times)
+    for attempt, sleep_time in enumerate(sleep_times, start=1):
         try:
             response = session.get(endpoint, params=params, timeout=timeout, stream=True)
             response.raise_for_status()
             return response
-        except (HTTPError, RequestException) as exc:
-            last_exc = exc
-            logging.warning("Retrying after exception (%s/%s): %s", attempt + 1, max_retries, exc)
-            if attempt + 1 == max_retries:
-                break
-            time.sleep(BACKOFF_SECONDS * (attempt + 1))
-    assert last_exc is not None
-    raise last_exc
+        except RequestException as exc:
+            if attempt == max_retries:
+                raise exc
+            logging.warning(f"Will retry {sleep_time} seconds after exception {exc} ({attempt}/{max_retries})")
+            time.sleep(sleep_time)
+    raise RuntimeError("Unreachable code reached in _request_with_retry")
 
 def stream_oai_records(
     session: requests.Session,
@@ -168,9 +162,8 @@ def stream_oai_records(
                         elif tag == 'error':
                             code = elem.get('code', 'unknown')
                             message = elem.text
-                            if code == 'noRecordsMatch':
-                                raise OAINoRecordsMatch(message or 'No records match the request')
-                            raise RuntimeError(f"OAI error {code}: {message}")
+                            if code != 'noRecordsMatch' or resumption_token is not None:
+                                raise RuntimeError(f"OAI error {code} for {params}: {message}")
                         elif tag == 'OAI-PMH':
                             closed_responses += 1
                         elif not tag in {'OAI-PMH','request','responseDate','ListRecords'}:
@@ -264,21 +257,18 @@ def crawl_oai_pmh(endpoint: str, metadata_prefix: Optional[str], output: str, se
         with cast(fsspec.core.OpenFile, fsspec.open(output, 'wt', compression='infer')) as of:
             of.write('<?xml version="1.0" encoding="UTF-8"?>\n')
             of.write('<records>\n')
-            try:
-                for record_xml in stream_oai_records(
-                    session,
-                    endpoint,
-                    metadata_prefix,
-                    set_spec,
-                    from_timestamp,
-                    until_timestamp,
-                    strip_xml=strip_xml,
-                    full_record=full_record,
-                ):
-                    of.write(record_xml)
-                    of.write('\n')
-            except OAINoRecordsMatch:
-                logging.warning("No records found.")
+            for record_xml in stream_oai_records(
+                session,
+                endpoint,
+                metadata_prefix,
+                set_spec,
+                from_timestamp,
+                until_timestamp,
+                strip_xml=strip_xml,
+                full_record=full_record,
+            ):
+                of.write(record_xml)
+                of.write('\n')
             of.write('</records>\n')
 
 
