@@ -1,5 +1,6 @@
 
 import dagster as dg
+from dagster_assets.defs.lod import lod_prefixes
 from dagster_assets.utils import create_rdf_overview, get_date_from_last_modified_file, get_etag, download_file, get_parquet_glob_sha1sum, log_and_run
 
 source_url = "http://ulandownloads.getty.edu/VocabData/explicit.zip"
@@ -14,7 +15,7 @@ def ulan_data() -> dg.DataVersion:
 def ulan_download(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     return download_file(context, source_url, work_file)
 
-@dg.asset(deps=[ulan_download], pool="parquet")
+@dg.asset(deps=[ulan_download, lod_prefixes], pool="parquet")
 def ulan_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     cmd = f"python src/process-ntriples.py -o {parquet_file} -p data/schema-info/lod_prefixes.tsv zip://*::{work_file}"
     log_and_run(cmd, context)

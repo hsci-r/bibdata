@@ -1,5 +1,6 @@
 
 import dagster as dg
+from dagster_assets.defs.lod import lod_prefixes
 from dagster_assets.utils import create_rdf_overview, get_date_from_last_modified_file, get_etag, download_file, get_parquet_glob_sha1sum, log_and_run
 
 source_url = "http://tgndownloads.getty.edu/VocabData/explicit.zip"
@@ -14,7 +15,7 @@ def tgn_data() -> dg.DataVersion:
 def tgn_download(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     return download_file(context, source_url, work_file)
 
-@dg.asset(deps=[tgn_download], pool="parquet")
+@dg.asset(deps=[tgn_download, lod_prefixes], pool="parquet")
 def tgn_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     cmd = f"python src/process-ntriples.py -o {parquet_file} -p data/schema-info/lod_prefixes.tsv zip://*::{work_file}"
     log_and_run(cmd, context)

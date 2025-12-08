@@ -1,5 +1,6 @@
 import glob
 import dagster as dg
+from dagster_assets.defs.lod import lod_prefixes
 from dagster_assets.utils import create_rdf_overview, download_file, get_date_from_file_modification_time, get_date_from_last_modified_file, get_etag, get_parquet_glob_sha1sum, log_and_run, create_bib_overview, run_bibxml2
 
 work_dir = "data/work/dbnf"
@@ -39,7 +40,7 @@ def dbnf_data() -> dg.DataVersionsByPartition:
 def dbnf_download(context: dg.AssetExecutionContext):
     return download_file(context, context.partition_key, f"{work_dir}/{context.partition_key[context.partition_key.rfind('/') + 1:]}.tar.gz")
 
-@dg.asset(deps=[dbnf_download], pool="parquet")
+@dg.asset(deps=[dbnf_download, lod_prefixes], pool="parquet")
 def dbnf_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     files = ['tar://*.nt::' + file for file in glob.glob(f"{work_dir}/*.tar.gz")]
     cmd = f"python src/process-ntriples.py -o {parquet_file} -p data/schema-info/lod_prefixes.tsv {' '.join(files)}"
