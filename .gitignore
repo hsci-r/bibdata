@@ -9,5 +9,4 @@ __pycache__
 .history
 data/work
 data/estc/estc*.parquet
-data/hpb/hpb*.parquet
 data/stcn/stcn*.parquet

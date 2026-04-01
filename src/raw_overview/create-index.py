@@ -1,10 +1,8 @@
 import glob
-import os
 from pathlib import Path
 import re
 from typing import cast
 import click
-import humanize
 from tqdm import tqdm
 
 @click.command()

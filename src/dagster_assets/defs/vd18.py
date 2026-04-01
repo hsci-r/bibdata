@@ -7,10 +7,11 @@ parquet_file = "data/vd18/vd18.parquet"
 @dg.asset(pool="download")
 def vd18_crawl(context: dg.AssetExecutionContext):
     cmd = (
-        "python src/crawl-sru.py "
+        "python src/raw_procure/crawl-sru.py "
         "-v 2.0 "
         "-e https://sru.k10plus.de/vd18 "
         f"-o {work_dir} "
+        "-i vd18 "
         "-r picaxml "
         "-q 'pica.ppn=0* or pica.ppn=1* or pica.ppn=2* or pica.ppn=3* or pica.ppn=4* or pica.ppn=5* or pica.ppn=6* or pica.ppn=7* or pica.ppn=8* or pica.ppn=9*'"
     )

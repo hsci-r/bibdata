@@ -20,7 +20,7 @@ def istc_download(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
 
 @dg.asset(deps=[istc_download], pool="parquet")
 def istc_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
-    cmd = f"python src/process-istc.py"
+    cmd = f"python src/raw_to_parquet/process-istc.py"
     log_and_run(cmd, context)
     return get_parquet_glob_sha1sum(parquet_file)
 

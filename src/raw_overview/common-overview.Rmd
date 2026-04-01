@@ -52,13 +52,13 @@ formats |>
   rowwise() |>
   group_walk(\(row, ...) {
     if (row$dataset == "wikidata") {
-      list.files(here("data/wikidata/")) |> 
+      list.files(here("data/wikidata/"), pattern=".*\\.parquet") |> 
         str_replace("(_[0-9])*\\.parquet","") |> 
         unique() |>
         walk(\(name) .GlobalEnv[[str_c('wd_',name)]] <- tbl(con, glue::glue("read_parquet('{here('data/wikidata')}/{name}*.parquet')")))
       NULL
     } else if (row$dataset == "isni") {
-      list.files(here("data/isni/")) |> 
+      list.files(here("data/isni/"), pattern=".*\\.parquet") |> 
         str_replace("(_[0-9])*\\.parquet","") |> 
         unique() |>
         walk(\(name) .GlobalEnv[[str_c('isni_',name)]] <- tbl(con, glue::glue("read_parquet('{here('data/isni')}/{name}*.parquet')")))
@@ -76,7 +76,7 @@ formats |>
       else
         .GlobalEnv[['td']] <- .GlobalEnv[['td']] |> 
           union_all(ds)
-    } else if (row$standard %in% c("intermarc", "marc21", "unimarc", "pica", "istc")) {
+    } else if (row$standard %in% c("intermarc", "marc21", "unimarc", "pica", "istc", "danmarc2")) {
       ds <- tbl(con, glue::glue("read_parquet('{here('data')}/{row$dataset}/{row$dataset}*.parquet')"))
       .GlobalEnv[[row$dataset]] <- ds
       if (ds |> head(n=1) |> count() |> pull() == 0) print(glue::glue("Dataset {row$dataset} is empty."))
@@ -106,16 +106,6 @@ formats |>
 # Overall summary
 
 `r d |> distinct(record_number) |> count() |> pull() |> as.integer() |> p()` records and `r d |> count() |> pull() |> as.integer() |> p()` attribute values in total. Constituent files:
-
-```{r filelist, results = 'asis'}
-
-cat("\n\n")
-for (file in files[order(files |> str_replace(".parquet", ""))]) {
-  unit_size <- unit_print(fs::file_info(file)$size)
-  cat(glue::glue("- {file} ({unit_size})\n"))
-}
-cat("\n")
-```
 
 ```{r}
 p_titles <- md |> 
@@ -168,6 +158,11 @@ p_countries_of_publication <- md |>
   ) |>
   union_all(
     md |> 
+      inner_join(formats |> filter(standard=="danmarc2")) |>
+      filter(field_code=="008", subfield_code=="b")
+  ) |>
+  union_all(
+    md |> 
       inner_join(formats |> filter(standard=="istc")) |>
       filter(subfield_code=="geo_info_imprint_country_code")
   ) |>
@@ -208,6 +203,11 @@ p_years <- md |>
   ) |>
   union_all(
     md |> 
+      inner_join(formats |> filter(standard=="danmarc2")) |>
+      filter(field_code=="008", subfield_code=="a")
+  ) |>  
+  union_all(
+    md |> 
       inner_join(formats |> filter(standard=="pica")) |>
       filter(field_code=="011@")
   ) |>
@@ -216,6 +216,14 @@ p_years <- md |>
       inner_join(formats |> filter(standard=="istc")) |>
       filter(field_code=="date_of_item_single_date")
   ) |>
+#  union_all(
+#    dbnf |> 
+#      filter(property=="bnfo:firstYear") |> 
+#      inner_join(dbnf |> 
+#                   filter(property=="rdf:type", object=="rdafrbr:Manifestation") |> 
+#                   distinct(subject)) |> 
+#      select(value=object)
+#  )
 #  union_all(md |>
 #    filter(dataset=="viaf", field_code=="997") |>
 #    mutate(value=str_sub(value, 1, 5))
@@ -227,9 +235,19 @@ p_years <- md |>
 ```
 
 
-```{r temporal}
+```{r temporal_2}
 p_years |>
+  inner_join(p_datasets, join_by(between(record_number, min_record_number, max_record_number))) |> 
   count(dataset, year) |>
+  union_all(
+    dbnf |> 
+      filter(property=="bnfo:firstYear") |> 
+      inner_join(dbnf |> 
+                   filter(property=="rdf:type", object=="rdafrbr:Manifestation") |> 
+                   distinct(subject)) |> 
+      count(year=object) |>
+      mutate(year=as.integer(year), dataset="dnbf") 
+  ) |>
   mutate(n=as.integer(n)) |>
   filter(year >= 1400L,year <= 2025L) |>
   ggplot(aes(x=year, y=n)) +
@@ -312,6 +330,11 @@ p_languages <- md |>
   ) |>
   union_all(
     md |> 
+      inner_join(formats |> filter(standard=="danmarc2")) |>
+      filter(field_code=="008", subfield_code=="a")
+  ) |>  
+  union_all(
+    md |> 
       inner_join(formats |> filter(standard=="istc")) |>
       filter(field_code=="date_of_item_single_date")
   ) |>
@@ -378,8 +401,8 @@ t |>
 ```
 
 ```{r}
+plyd <- p_years |> filter(year>=1800,year<=1900) |> left_join(p_languages) |> left_join(p_countries_of_publication) |> count(year, country_of_publication, language_code) |> collect()
 plyd |> 
-  filter(year >= 1400L,year <= 2025L) |> 
 #  left_join(marc_countries |> 
 #              mutate(code=code |> str_remove("-")), join_by(country_of_publication==code)) |>
 #  mutate(country_of_publication=coalesce(country, country_of_publication)) |>

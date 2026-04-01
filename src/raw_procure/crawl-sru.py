@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import glob
 import gzip
 import logging
 import os
@@ -41,9 +42,11 @@ def get_session_with_retries(retries=5):
 @click.option("-r", "--record-schema", help="record schema")
 @click.option("-bs", "--batch-size", help="batch size", default=1000, type=int)
 @click.option('-q', '--query', help='query', required=True)
-def crawl_sru(endpoint: str, query: str, version: str, record_schema: str, output: str, batch_size: int):
+@click.option('-i', '--id', help='dataset id', required=True)
+def crawl_sru(endpoint: str, query: str, version: str, record_schema: str, output: str, batch_size: int, id: str):
     """Fetch a dataset from an SRU endpoint"""
-    shutil.rmtree(output, ignore_errors=True)
+    for file in glob.glob(f"{output}/{id}_*.xml.gz"):
+        os.remove(file)
     os.makedirs(output, exist_ok=True)
     session = get_session_with_retries()
     params = dict(
@@ -59,7 +62,7 @@ def crawl_sru(endpoint: str, query: str, version: str, record_schema: str, outpu
         "numberOfRecords>([0-9]*)</", response)).group(1))
     logging.info(f"Going to download {total_records:,} records in batches of {batch_size:,}.")
     for start in tqdm(range(1, total_records, batch_size)):
-        with gzip.open(output  + os.sep + f'{str(start)}.xml.gz', 'wb') as f:
+        with gzip.open(output  + os.sep + f'{id}_{str(start)}.xml.gz', 'wb') as f:
             # logging.info(f"Processing batch {start} of {total_records}.")
             params['startRecord'] = start
             response = session.get(endpoint, params=params)

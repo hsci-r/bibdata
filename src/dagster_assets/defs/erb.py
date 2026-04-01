@@ -10,7 +10,7 @@ parquet_file = "data/erb/erb.parquet"
 @dg.asset(pool="download")
 def erb_crawl(context: dg.AssetExecutionContext):
     # No curl call here, skipping refactor
-    cmd = f"python src/crawl-oai-pmh.py -e https://data.digar.ee/repox/OAIHandler -o {work_file} -p marc21xml -s erb"
+    cmd = f"python src/raw_procure/crawl-oai-pmh.py -e https://data.digar.ee/repox/OAIHandler -o {work_file} -p marc21xml -s erb"
     log_and_run(cmd, context)
 
 
@@ -30,4 +30,3 @@ def erb_overview(context: dg.AssetExecutionContext):
         subfields_file="data/schema-info/marc_subfields.tsv",
         output_file="data/erb/erb-overview.html"
     )
-

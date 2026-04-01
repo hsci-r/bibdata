@@ -12,21 +12,21 @@ parquet_file = "data/melinda/melinda.parquet"
 #def melinda_crawl(context: dg.AssetExecutionContext):
 #    start = context.partition_time_window.start.strftime("%Y-%m")
 #    end = context.partition_time_window.end.strftime("%Y-%m")
-#    cmd = f"python src/crawl-oai-pmh.py -e https://oai-pmh.api.melinda.kansalliskirjasto.fi/bib -o {work_dir}/{start}.mrcx.zst -p melinda_marc -s melinda -f {start if start != '2019-01' else '0000-01'}-01 -u {end}-01"
+#    cmd = f"python src/raw_procure/crawl-oai-pmh.py -e https://oai-pmh.api.melinda.kansalliskirjasto.fi/bib -o {work_dir}/{start}.mrcx.zst -p melinda_marc -s melinda -f {start if start != '2019-01' else '0000-01'}-01 -u {end}-01"
 #    log_and_run(cmd, context)
 
 #@dg.asset(pool="melinda_api")
 #def melinda_crawl(context: dg.AssetExecutionContext):
 #    start = context.partition_time_window.start.strftime("%Y-%m")
 #    end = context.partition_time_window.end.strftime("%Y-%m")
-#    cmd = f"python src/crawl-oai-pmh.py -e https://oai-pmh.api.melinda.kansalliskirjasto.fi/bib -o {work_dir}/melinda.mrcx.zst -p melinda_marc -s melinda"
+#    cmd = f"python src/raw_procure/crawl-oai-pmh.py -e https://oai-pmh.api.melinda.kansalliskirjasto.fi/bib -o {work_dir}/melinda.mrcx.zst -p melinda_marc -s melinda"
 #    log_and_run(cmd, context)    
 
 @dg.asset(backfill_policy=dg.BackfillPolicy.multi_run(1), partitions_def=dg.WeeklyPartitionsDefinition(start_date="2019-01-01", day_offset=2), pool="melinda_api")
 def melinda_crawl(context: dg.AssetExecutionContext):
     start = context.partition_time_window.start.strftime("%Y-%m-%d")
     end = context.partition_time_window.end.strftime("%Y-%m-%d")
-    cmd = f"python src/crawl-oai-pmh.py -e https://oai-pmh.api.melinda.kansalliskirjasto.fi/bib -o {work_dir}/{start}.mrcx.zst -p melinda_marc -f {start} -u {end}"
+    cmd = f"python src/raw_procure/crawl-oai-pmh.py -e https://oai-pmh.api.melinda.kansalliskirjasto.fi/bib -o {work_dir}/{start}.mrcx.zst -p melinda_marc -f {start} -u {end}"
     log_and_run(cmd, context)
 
 @dg.asset(deps=[melinda_crawl], pool="parquet")

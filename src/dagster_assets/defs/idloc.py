@@ -17,7 +17,7 @@ def idloc_download(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
 
 @dg.asset(deps=[idloc_download, lod_prefixes], pool="parquet")
 def idloc_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
-    cmd = f"python src/process-ntriples.py -o {parquet_file} -p data/schema-info/lod_prefixes.tsv {work_file}"
+    cmd = f"python src/raw_to_parquet/process-ntriples.py -k idloc -o {parquet_file} -p data/schema-info/lod_prefixes.tsv {work_file}"
     log_and_run(cmd, context)
     return get_parquet_glob_sha1sum(parquet_file)
 

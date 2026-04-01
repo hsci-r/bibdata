@@ -11,7 +11,7 @@ parquet_file = "data/kbnl/kbnl.parquet"
 def kbnl_crawl(context: dg.AssetExecutionContext):
     start = context.partition_time_window.start.strftime("%Y-%m-%d")
     end = context.partition_time_window.end.strftime("%Y-%m-%d")
-    cmd = f"python src/crawl-oai-pmh.py -e https://services.kb.nl/mdo/oai -o {work_dir}/{start}.mrcx.zst -p picaplus -s GGC  -f {start if start != '2013-01-01' else '0000-01-01'} -u {end}"
+    cmd = f"python src/raw_procure/crawl-oai-pmh.py -e https://services.kb.nl/mdo/oai -o {work_dir}/{start}.mrcx.zst -p picaplus -s GGC  -f {start if start != '2013-01-01' else '0000-01-01'} -u {end}"
     log_and_run(cmd, context)
 
 
@@ -33,4 +33,3 @@ def kbnl_overview(context: dg.AssetExecutionContext):
         subfields_file="data/schema-info/gcc_pica_subfields.tsv",
         output_file="data/kbnl/kbnl-overview.html"
     )
-

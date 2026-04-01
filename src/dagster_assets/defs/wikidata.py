@@ -26,5 +26,5 @@ def wikidata_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     
 @dg.asset(deps=[wikidata_parquet], pool="overview")
 def wikidata_overview(context: dg.AssetExecutionContext):
-    cmd = f"Rscript -e \"rmarkdown::render('src/wikidata-overview.Rmd', output_file = '../data/wikidata/wikidata-overview.html')\""
+    cmd = f"Rscript -e \"rmarkdown::render('src/raw_overview/wikidata-overview.Rmd', output_file = '../../data/wikidata/wikidata-overview.html')\""
     log_and_run(cmd, context)

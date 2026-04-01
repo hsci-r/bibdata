@@ -4,6 +4,8 @@ from dagster_assets.utils import log_and_run
 from dagster_assets.defs.estc import estc_overview
 from dagster_assets.defs.cnb import cnb_overview
 from dagster_assets.defs.dnb import dnb_overview
+from dagster_assets.defs.natdk import natdk_overview
+from dagster_assets.defs.natno import natno_overview
 from dagster_assets.defs.erb import erb_overview
 from dagster_assets.defs.gnd import gnd_overview
 from dagster_assets.defs.fennica import fennica_overview
@@ -28,8 +30,7 @@ from dagster_assets.defs.isni import isni_overview
 from dagster_assets.defs.wikidata import wikidata_overview
 from dagster_assets.defs.geonames import geonames_overview
 
-@dg.asset(deps=[isni_overview, wikidata_overview, geonames_overview, idloc_overview, ulan_overview, tgn_overview, melinda_overview, dbnf_overview, estc_overview, cnb_overview, stcn_overview, stcv_overview, dnb_overview, erb_overview, gnd_overview, fennica_overview, hpb_overview, istc_overview, plnb_overview, ptnb_overview, vd17_overview, vd18_overview, viaf_overview, bnf_overview, kbnl_overview, kbse_overview])
+@dg.asset(deps=[isni_overview, wikidata_overview, geonames_overview, idloc_overview, ulan_overview, tgn_overview, melinda_overview, dbnf_overview, estc_overview, cnb_overview, stcn_overview, stcv_overview, dnb_overview, erb_overview, gnd_overview, fennica_overview, hpb_overview, istc_overview, plnb_overview, ptnb_overview, vd17_overview, vd18_overview, viaf_overview, bnf_overview, kbnl_overview, kbse_overview, natdk_overview, natno_overview])
 def index(context: dg.AssetExecutionContext):
-    cmd = "python src/create-index.py"
+    cmd = "python src/raw_overview/create-index.py"
     log_and_run(cmd, context)
-

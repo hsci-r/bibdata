@@ -38,7 +38,7 @@ def download_file(
     output_file: str,
 ) -> dg.MaterializeResult:
     Path(output_file).parent.mkdir(parents=True, exist_ok=True)
-    cmd = f"python src/download-file.py {shlex.quote(url)} {shlex.quote(output_file)}"
+    cmd = f"python src/raw_procure/download-file.py {shlex.quote(url)} {shlex.quote(output_file)}"
     log_and_run(cmd, context)
     with open(f"{output_file}.etag", "r") as f:
         etag = f.read().strip()
@@ -85,7 +85,7 @@ def create_bib_overview(
     end_year: Optional[str] = None,
 ) -> None:
     log_and_run(
-        f"Rscript src/create-bib-overview.R " +
+        f"Rscript src/raw_overview/create-bib-overview.R " +
         f"-n '{name}' " +
         (f"-y {start_year} " if start_year else "") +
         (f"-z {end_year} " if end_year else "") +
@@ -105,7 +105,7 @@ def create_rdf_overview(
     output_file: str,
 ) -> None:
     log_and_run(
-        f"Rscript src/create-rdf-overview.R " +
+        f"Rscript src/raw_overview/create-rdf-overview.R " +
         f"-n '{name}' " +
         f"-d {data_glob.replace('.parquet','*.parquet')} " +
         (f"-p {properties_file} " if properties_file else "") +

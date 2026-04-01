@@ -27,11 +27,11 @@ def isni_organisations_download(context: dg.AssetExecutionContext) -> dg.Materia
 
 @dg.asset(deps=[isni_people_download, isni_organisations_download], pool="parquet")
 def isni_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
-    cmd = f"python src/process-isni.py -o {parquet_file} -p data/schema-info/lod_prefixes.tsv {work_file_people} {work_file_organisations}"
+    cmd = f"python src/raw_to_parquet/process-isni.py -o {parquet_file} -p data/schema-info/lod_prefixes.tsv {work_file_people} {work_file_organisations}"
     log_and_run(cmd, context)
     return get_parquet_glob_sha1sum("data/isni/.parquet")
 
 @dg.asset(deps=[isni_parquet], pool="overview")
 def isni_overview(context: dg.AssetExecutionContext):
-    cmd = f"Rscript -e \"rmarkdown::render('src/isni-overview.Rmd', output_file = '../data/isni/isni-overview.html')\""
+    cmd = f"Rscript -e \"rmarkdown::render('src/raw_overview/isni-overview.Rmd', output_file = '../../data/isni/isni-overview.html')\""
     log_and_run(cmd, context)

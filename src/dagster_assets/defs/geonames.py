@@ -27,11 +27,11 @@ def altnames_download(context: dg.AssetExecutionContext) -> dg.MaterializeResult
 
 @dg.asset(deps=[geonames_download, altnames_download], pool="parquet")
 def geonames_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
-    cmd = f"python src/process-geonames.py"
+    cmd = f"python src/raw_to_parquet/process-geonames.py"
     log_and_run(cmd, context)
     return get_parquet_glob_sha1sum(parquet_file)
 
 @dg.asset(deps=[geonames_parquet], pool="overview")
 def geonames_overview(context: dg.AssetExecutionContext):
-    cmd = f"Rscript -e \"rmarkdown::render('src/geonames-overview.Rmd', output_file = '../data/geonames/geonames-overview.html')\""
+    cmd = f"Rscript -e \"rmarkdown::render('src/raw_overview/geonames-overview.Rmd', output_file = '../../data/geonames/geonames-overview.html')\""
     log_and_run(cmd, context)

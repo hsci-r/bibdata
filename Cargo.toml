@@ -33,4 +33,4 @@ tempfile = "3"
 
 [[bin]]
 name = "process-wikidata"
-path = "src/process-wikidata.rs"
+path = "src/raw_to_parquet/process-wikidata.rs"

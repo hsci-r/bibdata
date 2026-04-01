@@ -7,7 +7,7 @@ parquet_file = "data/kbse/kbse.parquet"
 
 #@dg.asset(pool="download")
 #def kbse_crawl(context: dg.AssetExecutionContext):
-#    cmd = f"python src/crawl-oai-pmh.py -e https://libris.kb.se/api/oaipmh/ -o {work_file} -p marcxml_includehold_expanded"
+#    cmd = f"python src/raw_procure/crawl-oai-pmh.py -e https://libris.kb.se/api/oaipmh/ -o {work_file} -p marcxml_includehold_expanded"
 #    log_and_run(cmd, context)
 
 #@dg.asset(backfill_policy=dg.BackfillPolicy.multi_run(1), partitions_def=dg.MonthlyPartitionsDefinition(start_date="2002-01", fmt="%Y-%m"), pool="kbse_api")
@@ -15,7 +15,7 @@ parquet_file = "data/kbse/kbse.parquet"
 def kbse_crawl(context: dg.AssetExecutionContext):
     start = context.partition_time_window.start.strftime("%Y-%m-%d")
     end = context.partition_time_window.end.strftime("%Y-%m-%d")
-    cmd = f"python src/crawl-oai-pmh.py -e https://libris.kb.se/api/oaipmh/ -o {work_dir}/{start}.mrcx.zst -p marcxml_includehold_expanded -f {start if start != '2002-01-01' else '0000-01-01'} -u {end}"
+    cmd = f"python src/raw_procure/crawl-oai-pmh.py -e https://libris.kb.se/api/oaipmh/ -o {work_dir}/{start}.mrcx.zst -p marcxml_includehold_expanded -f {start if start != '2002-01-01' else '0000-01-01'} -u {end}"
     log_and_run(cmd, context)
 
 
@@ -35,4 +35,3 @@ def kbse_overview(context: dg.AssetExecutionContext):
         subfields_file="data/schema-info/gcc_pica_subfields.tsv",
         output_file="data/kbse/kbse-overview.html"
     )
-

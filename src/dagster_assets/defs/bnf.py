@@ -7,7 +7,7 @@ parquet_file = "data/bnf/bnf.parquet"
 @dg.asset(pool="download")
 def bnf_crawl(context: dg.AssetExecutionContext):
     cmd = (
-        "python src/crawl-sru.py "
+        "python src/raw_procure/crawl-sru.py "
         "-v 1.2 "
         "-e https://catalogue.bnf.fr/api/SRU " 
         "-o data/work/bnf "

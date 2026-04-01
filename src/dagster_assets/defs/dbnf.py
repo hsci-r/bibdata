@@ -43,7 +43,7 @@ def dbnf_download(context: dg.AssetExecutionContext):
 @dg.asset(deps=[dbnf_download, lod_prefixes], pool="parquet")
 def dbnf_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     files = ['tar://*.nt::' + file for file in glob.glob(f"{work_dir}/*.tar.gz")]
-    cmd = f"python src/process-ntriples.py -o {parquet_file} -p data/schema-info/lod_prefixes.tsv {' '.join(files)}"
+    cmd = f"python src/raw_to_parquet/process-ntriples.py -k dbnf -o {parquet_file} -p data/schema-info/lod_prefixes.tsv {' '.join(files)}"
     log_and_run(cmd, context)
     return get_parquet_glob_sha1sum(parquet_file)
 
