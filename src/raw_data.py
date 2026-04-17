@@ -1,9 +1,14 @@
-from raw_refine.core import *
+from typing import Callable
+
+from sqlalchemy import func
+
+from core import *
 from duckdb import DuckDBPyRelation
 import re
 
 bnf = cast(nw.LazyFrame[DuckDBPyRelation], None)
 cnb = cast(nw.LazyFrame[DuckDBPyRelation], None)
+cerl_thesaurus = cast(nw.LazyFrame[DuckDBPyRelation], None)
 dbnf = cast(nw.LazyFrame[DuckDBPyRelation], None)
 dnb = cast(nw.LazyFrame[DuckDBPyRelation], None)
 erb = cast(nw.LazyFrame[DuckDBPyRelation], None)
@@ -67,11 +72,16 @@ wd_claim_string = cast(nw.LazyFrame[DuckDBPyRelation], None)
 wd_claim_monolingualtext = cast(nw.LazyFrame[DuckDBPyRelation], None)
 wd_sitelinks = cast(nw.LazyFrame[DuckDBPyRelation], None)
 
-formats = nw.from_native(con.read_csv(here("data/schema-info/collection_info.tsv")))
+collection_info = nw.from_native(con.read_csv(here("data/schema-info/collection_info.tsv")))
 
-for row in formats.collect(backend='polars').iter_rows(named=True):
-    dataset = row['dataset']
-    standard = row['standard']
+def iter_datasets(func: Callable[[str, str], None]):
+    for row in (pbar := tqdm(list(collection_info.collect(backend='polars').iter_rows(named=True)))):
+        dataset = row['dataset']
+        standard = row['standard']
+        pbar.set_description(f"{dataset} ({standard})")
+        func(dataset, standard)
+
+def register_dataset(dataset: str, standard: str):
     if dataset == "wikidata":
         for subdataset in {re.sub(r"(_[0-9])*\.parquet","", file.name) for file in here("data/wikidata").glob("*.parquet")}:
             clean_subdataset = subdataset.replace("-", "_")
@@ -90,11 +100,13 @@ for row in formats.collect(backend='polars').iter_rows(named=True):
         ds = read_parquet(dataset, here(f"data/{dataset}/*.parquet"))
         globals()[dataset] = ds
         #print(f"{dataset} = cast(nw.LazyFrame[DuckDBPyRelation], None)")
-    elif standard in {"intermarc", "marc21", "unimarc", "pica", "istc", "danmarc"}:
+    elif standard in {"intermarc", "marc21", "unimarc", "pica", "istc", "danmarc", "ctmarc"}:
         ds = read_parquet(dataset, here(f"data/{dataset}/*.parquet"))
         globals()[dataset] = ds
         #print(f"{dataset} = cast(nw.LazyFrame[DuckDBPyRelation], None)")
     else:
         raise ValueError(f"Unknown dataset standard {standard} for dataset {dataset}")
 
-__all__ = ["bnf", "cnb", "dbnf", "dnb", "erb", "estc", "fennica", "geonames", "geonames_alternate_names", "gnd", "hpb", "idloc", "isni_same_as", "isni_deprecated_isnis", "isni_source_ids", "isni_authority_ids", "isni_names", "isni_core", "istc", "kbnl", "kbse", "melinda", "natdk", "natno", "plnb", "ptnb", "stcn", "stcv", "tgn", "ulan", "vd17", "vd18", "viaf", "wd_claim_quantity", "wd_descriptions", "wd_labels", "wd_qualifier_monolingualtext", "wd_reference_string", "wd_claim_no_value", "wd_aliases", "wd_entities", "wd_qualifier_quantity", "wd_qualifier_globecoordinate", "wd_claim_wikibase_entityid", "wd_claim_globecoordinate", "wd_reference_monolingualtext", "wd_claim_some_value", "wd_datatypes", "wd_sitelink_badges", "wd_qualifier_some_value", "wd_reference_some_value", "wd_claim_time", "wd_reference_quantity", "wd_reference_wikibase_entityid", "wd_reference_time", "wd_qualifier_no_value", "wd_qualifier_time", "wd_qualifier_string", "wd_reference_no_value", "wd_qualifier_wikibase_entityid", "wd_reference_globecoordinate", "wd_claim_string", "wd_claim_monolingualtext", "wd_sitelinks", "formats"]
+iter_datasets(register_dataset)
+
+__all__ = ["bnf", "cnb", "cerl_thesaurus", "dbnf", "dnb", "erb", "estc", "fennica", "geonames", "geonames_alternate_names", "gnd", "hpb", "idloc", "isni_same_as", "isni_deprecated_isnis", "isni_source_ids", "isni_authority_ids", "isni_names", "isni_core", "istc", "kbnl", "kbse", "melinda", "natdk", "natno", "plnb", "ptnb", "stcn", "stcv", "tgn", "ulan", "vd17", "vd18", "viaf", "wd_claim_quantity", "wd_descriptions", "wd_labels", "wd_qualifier_monolingualtext", "wd_reference_string", "wd_claim_no_value", "wd_aliases", "wd_entities", "wd_qualifier_quantity", "wd_qualifier_globecoordinate", "wd_claim_wikibase_entityid", "wd_claim_globecoordinate", "wd_reference_monolingualtext", "wd_claim_some_value", "wd_datatypes", "wd_sitelink_badges", "wd_qualifier_some_value", "wd_reference_some_value", "wd_claim_time", "wd_reference_quantity", "wd_reference_wikibase_entityid", "wd_reference_time", "wd_qualifier_no_value", "wd_qualifier_time", "wd_qualifier_string", "wd_reference_no_value", "wd_qualifier_wikibase_entityid", "wd_reference_globecoordinate", "wd_claim_string", "wd_claim_monolingualtext", "wd_sitelinks", "collection_info", "iter_datasets"]

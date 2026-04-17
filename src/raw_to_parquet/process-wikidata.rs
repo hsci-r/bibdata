@@ -127,8 +127,6 @@ macro_rules! push_qual_header {
         push_opt_str($datatype, $b.datatype.as_deref());
     }};
 }
-use push_claim_header;
-use push_qual_header;
 
 // Small macro to finish builders, reset counts, and send a batch for SimpleBatchers
 macro_rules! flush_simple_async {
@@ -733,16 +731,24 @@ async fn process_entity(
     batch_size: usize,
     claim_ids: &ClaimIdGen,
 ) -> Result<()> {
-    let obj: Value = serde_json::from_str(json_line).with_context(|| {
-        format!(
-            "failed to parse entity json: {}",
-            json_snippet(&Value::String(json_line.chars().take(200).collect()))
-        )
-    })?;
-    let id = obj
-        .get("id")
-        .and_then(|v| v.as_str())
-        .with_context(|| format!("entity missing 'id'; entity={}", json_line))?;
+    let obj: Value = match serde_json::from_str(json_line) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!(
+                "Warning: skipping unparseable entity JSON: {}; line={}",
+                e,
+                json_snippet(&Value::String(json_line.chars().take(200).collect()))
+            );
+            return Ok(());
+        }
+    };
+    let Some(id) = obj.get("id").and_then(|v| v.as_str()) else {
+        eprintln!(
+            "Warning: skipping entity missing 'id': {}",
+            json_snippet(&obj)
+        );
+        return Ok(());
+    };
     let entity_id = interner.get_or_insert(simple, id);
 
     if let Some(labels) = obj.get("labels").and_then(|v| v.as_object()) {
@@ -787,41 +793,43 @@ async fn process_entity(
         for (_p, arr) in claims {
             if let Some(claim_list) = arr.as_array() {
                 for claim in claim_list {
-                    let rank_str =
-                        claim
-                            .get("rank")
-                            .and_then(|v| v.as_str())
-                            .with_context(|| {
-                                format!("claim missing 'rank'; claim={}", json_snippet(claim))
-                            })?;
+                    let Some(rank_str) = claim.get("rank").and_then(|v| v.as_str()) else {
+                        eprintln!(
+                            "Warning: skipping claim missing 'rank': {}",
+                            json_snippet(claim)
+                        );
+                        continue;
+                    };
                     let rank = Rank::from(rank_str);
-                    let mainsnak = claim.get("mainsnak").with_context(|| {
-                        format!("claim missing 'mainsnak'; claim={}", json_snippet(claim))
-                    })?;
-                    let property = mainsnak
-                        .get("property")
-                        .and_then(|v| v.as_str())
-                        .with_context(|| {
-                            format!(
-                                "mainsnak missing 'property'; mainsnak={}",
-                                json_snippet(mainsnak)
-                            )
-                        })?;
+                    let Some(mainsnak) = claim.get("mainsnak") else {
+                        eprintln!(
+                            "Warning: skipping claim missing 'mainsnak': {}",
+                            json_snippet(claim)
+                        );
+                        continue;
+                    };
+                    let Some(property) = mainsnak.get("property").and_then(|v| v.as_str()) else {
+                        eprintln!(
+                            "Warning: skipping claim with mainsnak missing 'property': {}",
+                            json_snippet(mainsnak)
+                        );
+                        continue;
+                    };
                     let property_id = interner.get_or_insert(simple, property);
                     let datatype = mainsnak
                         .get("datatype")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
 
-                    let claim_id_for_claim = claim_ids.next();
+                    let claim_id = claim_ids.next();
                     let base = BaseClaim {
-                        claim_id: claim_id_for_claim,
+                        claim_id,
                         rank,
                         entity_id,
                         property_id,
                         datatype,
                     };
-                    process_snak_value(
+                    if let Err(e) = process_snak_value(
                         interner,
                         simple,
                         builders,
@@ -832,9 +840,10 @@ async fn process_entity(
                         property_id,
                         mainsnak,
                     )
-                    .await?;
-                    // A second id shared by all qualifiers/references of this claim
-                    let claim_id_for_subs = claim_ids.next();
+                    .await
+                    {
+                        eprintln!("Warning: skipping claim snak due to error: {:#}", e);
+                    }
 
                     if let Some(quals) = claim.get("qualifiers").and_then(|v| v.as_object()) {
                         let order_list: Vec<&str> = claim
@@ -853,11 +862,11 @@ async fn process_entity(
                                     let qprop_id = property_id;
                                     let base = BaseQual {
                                         order,
-                                        claim_id: claim_id_for_subs,
+                                        claim_id,
                                         property_id: qprop_id,
                                         datatype: qdatatype,
                                     };
-                                    process_snak_value(
+                                    if let Err(e) = process_snak_value(
                                         interner,
                                         simple,
                                         builders,
@@ -868,7 +877,13 @@ async fn process_entity(
                                         property_id,
                                         qualifier,
                                     )
-                                    .await?;
+                                    .await
+                                    {
+                                        eprintln!(
+                                            "Warning: skipping qualifier snak due to error: {:#}",
+                                            e
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -892,11 +907,11 @@ async fn process_entity(
                                                 .map(|s| s.to_string());
                                             let base = BaseQual {
                                                 order,
-                                                claim_id: claim_id_for_subs,
+                                                claim_id,
                                                 property_id,
                                                 datatype: qdatatype,
                                             };
-                                            process_snak_value(
+                                            if let Err(e) = process_snak_value(
                                                 interner,
                                                 simple,
                                                 builders,
@@ -907,7 +922,13 @@ async fn process_entity(
                                                 property_id,
                                                 snak,
                                             )
-                                            .await?;
+                                            .await
+                                            {
+                                                eprintln!(
+                                                    "Warning: skipping reference snak due to error: {:#}",
+                                                    e
+                                                );
+                                            }
                                         }
                                     }
                                 }

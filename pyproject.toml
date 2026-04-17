@@ -34,6 +34,9 @@ dev = [
     "pytest>=8.3",
 ]
 
+[tool.uv]
+package = true
+
 [tool.dg]
 directory_type = "project"
 

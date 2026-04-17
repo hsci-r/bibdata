@@ -15,6 +15,13 @@ output:
 
 ```{r setup, echo=F, warning=F, error=F, include=F}
 knitr::opts_chunk$set(echo=F, warning=F, error=F)
+options(box.path = here::here(""))
+box::use(src/core)
+rlang::env_coalesce(box::topenv(), core)
+box::use(src/unified_data)
+rlang::env_coalesce(box::topenv(), unified_data)
+box::use(src/raw_id_mappings)
+rlang::env_coalesce(box::topenv(), raw_id_mappings)
 library(tidyverse)
 library(gt)
 library(glue)
@@ -25,247 +32,43 @@ library(here)
 
 p <- scales::label_number()
 pp <- scales::label_percent()
-
-if (is.null(getOption("arrow_duck_con"))) {
-  options(
-    arrow_duck_con = DBI::dbConnect(
-      duckdb::duckdb(bigint = "integer64"),
-      bigint = "integer64",
-      dbdir = str_c(tempdir(), "/duckdb")
-    )
-  )
-}
-con <- getOption("arrow_duck_con")
-
-DBI::dbExecute(con, "SET preserve_insertion_order = false;")
-DBI::dbExecute(con, "SET memory_limit = '64GB';")
-
-formats <- read_tsv(here("data/schema-info/collection_info.tsv")) |> 
-  to_duckdb()
-
-td <- NULL
-md <- NULL
-max_record_number <- 0L
-
-formats |> 
-  collect() |>
-  rowwise() |>
-  group_walk(\(row, ...) {
-    if (row$dataset == "wikidata") {
-      list.files(here("data/wikidata/"), pattern=".*\\.parquet") |> 
-        str_replace("(_[0-9])*\\.parquet","") |> 
-        unique() |>
-        walk(\(name) .GlobalEnv[[str_c('wd_',name)]] <- tbl(con, glue::glue("read_parquet('{here('data/wikidata')}/{name}*.parquet')")))
-      NULL
-    } else if (row$dataset == "isni") {
-      list.files(here("data/isni/"), pattern=".*\\.parquet") |> 
-        str_replace("(_[0-9])*\\.parquet","") |> 
-        unique() |>
-        walk(\(name) .GlobalEnv[[str_c('isni_',name)]] <- tbl(con, glue::glue("read_parquet('{here('data/isni')}/{name}*.parquet')")))
-    } else if (row$dataset == "geonames") {
-      .GlobalEnv[["geonames"]] <- tbl(con, glue::glue("read_parquet('{here('data')}/geonames/geonames*.parquet')"))
-      .GlobalEnv[["geonames_alternate_names"]] <- tbl(con, glue::glue("read_parquet('{here('data')}/geonames/alternate_names*.parquet')"))
-    } else if (row$standard == "rdf") {
-      ds <- tbl(con, glue::glue("read_parquet('{here('data')}/{row$dataset}/{row$dataset}*.parquet')")) |>
-        relocate(subject, property, object)
-      .GlobalEnv[[row$dataset]] <- ds
-      ds <- ds |> 
-        mutate(dataset=row$dataset)
-      if (is.null(.GlobalEnv[['td']]))
-        .GlobalEnv[['td']] <- ds
-      else
-        .GlobalEnv[['td']] <- .GlobalEnv[['td']] |> 
-          union_all(ds)
-    } else if (row$standard %in% c("intermarc", "marc21", "unimarc", "pica", "istc", "danmarc2")) {
-      ds <- tbl(con, glue::glue("read_parquet('{here('data')}/{row$dataset}/{row$dataset}*.parquet')"))
-      .GlobalEnv[[row$dataset]] <- ds
-      if (ds |> head(n=1) |> count() |> pull() == 0) print(glue::glue("Dataset {row$dataset} is empty."))
-      else {
-        if (is.null(.GlobalEnv[['md']])) {
-          .GlobalEnv[['md']] <- ds |> 
-            mutate(dataset=row$dataset)
-          .GlobalEnv[['max_record_number']] <- ds |> 
-            summarise(max(record_number)) |> 
-            pull()        
-        } else 
-          max_record_number <- .GlobalEnv[['max_record_number']]
-        ds <- ds |> 
-          mutate(dataset=row$dataset, record_number = max_record_number + record_number)
-        .GlobalEnv[['md']] <- .GlobalEnv[['md']] |>
-          union_all(ds)
-        .GlobalEnv[['max_record_number']] <- ds |> 
-          summarise(max(record_number)) |> 
-          pull()
-      }
-    } else {
-      stop("Unknown dataset type ", row)
-    }
-  })
 ```
 
 # Overall summary
 
-`r d |> distinct(record_number) |> count() |> pull() |> as.integer() |> p()` records and `r d |> count() |> pull() |> as.integer() |> p()` attribute values in total. Constituent files:
-
-```{r}
-p_titles <- md |> 
-  inner_join(formats |> filter(standard =="marc21")) |>
-  filter(field_code=="245", subfield_code=="a") |>
-  union_all(md |> 
-              inner_join(formats |> filter(standard=="intermarc")) |>
-              filter(field_code=="245", subfield_code=="a")
-  ) |>
-  union_all(md |> 
-              inner_join(formats |> filter(standard=="unimarc")) |>
-              filter(field_code=="200", subfield_code=="a")
-  ) |>
-  union_all(md |> 
-              inner_join(formats |> filter(standard=="pica")) |>
-              filter(field_code=="021A", subfield_code=="a")
-  ) |>
-  union_all(md |> 
-              inner_join(formats |> filter(standard=="istc")) |>
-              filter(field_code=="title")
-  ) |>
-  select(record_number, main_title=value) |>
-  compute()
-```
-
-```{r}
-p_countries_of_publication <- md |> 
-  inner_join(formats |> filter(standard=="marc21")) |>
-  filter(field_code=="008") |> 
-  mutate(value=value |> str_sub(16, 18) |> str_squish()) |>
-  union_all(md |> 
-    inner_join(formats |> filter(standard=="marc21")) |>
-    filter(field_code=="044")
-  ) |>
-   union_all(
-    md |> 
-      inner_join(formats |> filter(standard=="intermarc")) |>
-      filter(field_code=="008") |> 
-      mutate(value=str_sub(value, 30, 31))
-  ) |>
-  union_all(
-    md |> 
-      inner_join(formats |> filter(standard=="unimarc")) |>
-      filter(field_code=="102", subfield_code=="a") 
-  ) |>
-  union_all(
-    md |> 
-      inner_join(formats |> filter(standard=="pica")) |>
-      filter(field_code=="019@", subfield_code=="a")
-  ) |>
-  union_all(
-    md |> 
-      inner_join(formats |> filter(standard=="danmarc2")) |>
-      filter(field_code=="008", subfield_code=="b")
-  ) |>
-  union_all(
-    md |> 
-      inner_join(formats |> filter(standard=="istc")) |>
-      filter(subfield_code=="geo_info_imprint_country_code")
-  ) |>
-  mutate(value=value |> str_replace("[^-]*-", "") |> str_replace("-.*","") |> str_to_lower()) |>
-  distinct(record_number, country_of_publication=value) |>
-  compute()
-p_countries_of_publication
-```
-
-
-
-```{r}
-p_datasets <- md |> 
-  group_by(dataset) |> 
-  summarise(min_record_number=min(record_number),max_record_number=max(record_number)) |>
-  compute()
-```
-
-
 ## Temporal overview
 
+
 ```{r temporal}
-p_years <- md |> 
-  inner_join(formats |> filter(standard=="marc21")) |>
-  filter(field_code=="008") |> 
-  mutate(value=str_sub(value, 8, 11)) |> 
-  union_all(
-    md |> 
-      inner_join(formats |> filter(standard=="intermarc")) |>
-      filter(field_code=="008") |> 
-      mutate(value=str_sub(value, 9, 12))
-  ) |>
-  union_all(
-    md |> 
-      inner_join(formats |> filter(standard=="unimarc")) |>
-      filter(field_code=="100") |> 
-      mutate(value=str_sub(value, 10, 13))
-  ) |>
-  union_all(
-    md |> 
-      inner_join(formats |> filter(standard=="danmarc2")) |>
-      filter(field_code=="008", subfield_code=="a")
-  ) |>  
-  union_all(
-    md |> 
-      inner_join(formats |> filter(standard=="pica")) |>
-      filter(field_code=="011@")
-  ) |>
-  union_all(
-    md |> 
-      inner_join(formats |> filter(standard=="istc")) |>
-      filter(field_code=="date_of_item_single_date")
-  ) |>
+p_year_of_publication |>
+  inner_join(e_id, join_by(e_id)) |>
+  count(source, year_of_publication) |>
 #  union_all(
 #    dbnf |> 
 #      filter(property=="bnfo:firstYear") |> 
 #      inner_join(dbnf |> 
 #                   filter(property=="rdf:type", object=="rdafrbr:Manifestation") |> 
 #                   distinct(subject)) |> 
-#      select(value=object)
-#  )
-#  union_all(md |>
-#    filter(dataset=="viaf", field_code=="997") |>
-#    mutate(value=str_sub(value, 1, 5))
+#      count(year=object) |>
+#      mutate(year=as.integer(year), dataset="dnbf") 
 #  ) |>
-  filter(str_detect(value, "^\\d{1,4}$")) |>
-  mutate(year=as.integer(value)) |>
-  select(record_number, year) |>
-  compute()
-```
-
-
-```{r temporal_2}
-p_years |>
-  inner_join(p_datasets, join_by(between(record_number, min_record_number, max_record_number))) |> 
-  count(dataset, year) |>
-  union_all(
-    dbnf |> 
-      filter(property=="bnfo:firstYear") |> 
-      inner_join(dbnf |> 
-                   filter(property=="rdf:type", object=="rdafrbr:Manifestation") |> 
-                   distinct(subject)) |> 
-      count(year=object) |>
-      mutate(year=as.integer(year), dataset="dnbf") 
-  ) |>
   mutate(n=as.integer(n)) |>
-  filter(year >= 1400L,year <= 2025L) |>
-  ggplot(aes(x=year, y=n)) +
+  filter(year_of_publication >= 1400L,year_of_publication <= 2025L) |>
+  ggplot(aes(x=year_of_publication, y=n)) +
   geom_step() +
   theme_hsci_discrete() +
   xlab("Year") +
   ylab("Records (N)") +
   scale_y_continuous(labels=p) +
   scale_x_continuous(breaks=seq(1400,2100, by=100)) +
-  facet_wrap(~dataset, scales="free_y")
+  facet_wrap(~source, scales="free_y")
 ```
 
 ```{r}
 p_years |> 
   inner_join(p_datasets, join_by(between(record_number, min_record_number, max_record_number))) |> 
-  left_join(d |> filter(dataset=="hpb", field_code=="009@") |> select(record_number, value) |> rename(collection=value)) |>
-  mutate(dataset=coalesce(collection,dataset)) |>
-  filter(dataset!="hpb") |>
+  left_join(md |> filter(dataset=="hpb", field_code=="009@") |> transmute(record_number, collection=str_c("hpb-", value)), join_by(record_number)) |>
+  mutate(dataset=coalesce(collection, dataset)) |>
   count(dataset, year) |>
   mutate(n=as.integer(n)) |>
   filter(year >= 1400L,year <= 2025L) |>
@@ -277,7 +80,8 @@ p_years |>
   ungroup() |>
   ggplot(aes(x=year, y=n)) +
   geom_line() +
-  theme_hsci_discrete() +
+  theme_hsci() +
+  scale_color_manual(values=rep(coloropt_pal()(12),10))
   xlab("Year") +
   ylab("Records (N)") +
   scale_y_continuous(labels=p) +

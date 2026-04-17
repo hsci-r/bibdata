@@ -24,4 +24,6 @@ dependencies = [
     "gt",
     "ISOcodes",
     "here",
+    "box",
+    "ggbeeswarm",
 ]

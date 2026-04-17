@@ -8,7 +8,7 @@ from io import TextIOWrapper
 import logging
 import re
 import shutil
-from typing import Callable, Iterator
+from typing import Callable, Iterator, cast
 
 import click
 import duckdb
@@ -125,7 +125,7 @@ def convert_ntriples(input: list[str], prefixes: str, skolem_prefix: str, output
     print("Renaming final parquet files:")
     shutil.rmtree(output, ignore_errors=True)
     for file in tqdm(glob.glob(f"{output}.tmp.2/data_*.parquet")):
-        part = re.search(r'data(_\d+).parquet', file).group(1)
+        part = cast(re.Match, re.search(r'data(_\d+).parquet', file)).group(1)
         if part == "_0":
             part = ""
         shutil.move(file, output.replace('.parquet', part+'.parquet'))

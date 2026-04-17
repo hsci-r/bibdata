@@ -10,7 +10,7 @@ import logging
 import os
 import re
 import shutil
-from typing import Iterator
+from typing import Iterator, cast
 
 import click
 import duckdb
@@ -175,7 +175,7 @@ def convert_isni(input: list[str], prefixes: str, output: str, max_file_size: in
         duckdb.query(f"COPY (SELECT * FROM parquet_scan('{output}.tmp/{part}.parquet')) TO '{output}.tmp.2/{part}' (FORMAT 'parquet', COMPRESSION 'zstd', COMPRESSION_LEVEL 22, STRING_DICTIONARY_PAGE_SIZE_LIMIT 100_000, FILE_SIZE_BYTES {max_file_size})")
         os.remove(f"{output}.tmp/{part}.parquet")
         for file in tqdm(glob.glob(f"{output}.tmp.2/{part}/data_*.parquet")):
-            part2 = re.search(r'data(_\d+).parquet', file).group(1)
+            part2 = cast(re.Match, re.search(r'data(_\d+).parquet', file)).group(1)
             if part2 == "_0":
                 part2 = ""
             shutil.move(file, f"{output}/{part}{part2}.parquet")

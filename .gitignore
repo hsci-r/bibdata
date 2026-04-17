@@ -2,7 +2,8 @@ src/scratch.ipynb
 target
 dagster_state
 .DS_Store
-__pycache__
+__pycache__/
+*.egg-info/
 .Rproj.user
 .Rhistory
 .RData
