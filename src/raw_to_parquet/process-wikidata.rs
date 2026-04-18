@@ -26,6 +26,15 @@ const READY_BATCHES_BUFFER: usize = 2;
 const LINE_CHANNEL_CAPACITY: usize = 5_000;
 const DEFAULT_BATCH_SIZE: usize = 122_880;
 const DEFAULT_MAX_FILE_SIZE: u64 = 4_000_000_000;
+const SIMPLE_DATASETS: &[&str] = &[
+    "entities",
+    "labels",
+    "aliases",
+    "descriptions",
+    "datatypes",
+    "sitelinks",
+    "sitelink_badges",
+];
 
 // Small helpers for clarity
 #[inline]
@@ -47,11 +56,6 @@ fn strip_uri(s: &str) -> &str {
 }
 
 #[inline]
-fn intern_uri<'a>(interner: &Interner, simple: &mut SimpleBatchers, s: &'a str) -> i64 {
-    interner.get_or_insert(simple, strip_uri(s))
-}
-
-#[inline]
 fn order_of<S: AsRef<str>>(list: &[S], prop: &str) -> i32 {
     list.iter()
         .position(|x| x.as_ref() == prop)
@@ -59,115 +63,15 @@ fn order_of<S: AsRef<str>>(list: &[S], prop: &str) -> i32 {
         .unwrap()
 }
 
-// Tiny helpers to keep code terse and consistent
+// Compact JSON access helper with consistent error context
 #[inline]
-fn push_opt_str(builder: &mut StringBuilder, val: Option<&str>) {
-    if let Some(s) = val {
-        builder.append_value(s)
-    } else {
-        builder.append_null()
-    }
-}
-
-#[inline]
-fn push_opt_f64(builder: &mut Float64Builder, val: Option<f64>) {
-    if let Some(v) = val {
-        builder.append_value(v)
-    } else {
-        builder.append_null()
-    }
-}
-
-#[inline]
-fn push_opt_i64(builder: &mut Int64Builder, val: Option<i64>) {
-    if let Some(v) = val {
-        builder.append_value(v)
-    } else {
-        builder.append_null()
-    }
-}
-
-// Compact JSON access helpers with consistent error context
-#[inline]
-fn req_str_opt<'a>(v: Option<&'a str>, msg: &str, ctx: &Value) -> Result<&'a str> {
-    v.with_context(|| format!("{}; snak={}", msg, json_snippet(ctx)))
-}
-
-#[inline]
-fn req_i64_opt(v: Option<i64>, msg: &str, ctx: &Value) -> Result<i64> {
-    v.with_context(|| format!("{}; snak={}", msg, json_snippet(ctx)))
-}
-
-#[inline]
-fn req_f64_opt(v: Option<f64>, msg: &str, ctx: &Value) -> Result<f64> {
+fn req_opt<T>(v: Option<T>, msg: &str, ctx: &Value) -> Result<T> {
     v.with_context(|| format!("{}; snak={}", msg, json_snippet(ctx)))
 }
 
 #[inline]
 fn make_batch(schema: SchemaRef, arrays: Vec<Arc<dyn arrow::array::Array>>) -> Result<RecordBatch> {
     Ok(RecordBatch::try_new(schema, arrays)?)
-}
-
-// Macros for concise repeated builder appends
-macro_rules! push_claim_header {
-    ($claim_id:expr, $rank:expr, $entity_id:expr, $property_id:expr, $datatype:expr, $b:expr) => {{
-        $claim_id.append_value($b.claim_id);
-        $rank.append_value($b.rank.as_str());
-        $entity_id.append_value($b.entity_id);
-        $property_id.append_value($b.property_id);
-        push_opt_str($datatype, $b.datatype.as_deref());
-    }};
-}
-
-macro_rules! push_qual_header {
-    ($order:expr, $claim_id:expr, $property_id:expr, $datatype:expr, $b:expr) => {{
-        $order.append_value($b.order);
-        $claim_id.append_value($b.claim_id);
-        $property_id.append_value($b.property_id);
-        push_opt_str($datatype, $b.datatype.as_deref());
-    }};
-}
-
-// Small macro to finish builders, reset counts, and send a batch for SimpleBatchers
-macro_rules! flush_simple_async {
-    ($self:ident, $cond:expr, $count:ident, $schema_fn:ident, [$($col:ident),+], $tx:ident) => {
-        if $cond {
-            let batch = make_batch(
-                $schema_fn(),
-                vec![ $( Arc::new($self.$col.finish()) ),+ ],
-            ).unwrap();
-            $self.$count = 0;
-            $self.$tx.send(batch).await.ok();
-        }
-    };
-}
-
-// Macro to finish a claim batch: reset count, finish header arrays, then finish value arrays
-macro_rules! finish_claim_batch {
-    // No value columns
-    ($schema:expr, $is_claim:expr, $header:ident, $count:ident) => {{
-        *$count = 0;
-        let cols = $header.finish_to_arrays($is_claim);
-        make_batch($schema, cols)
-    }};
-    // One or more value columns
-    ($schema:expr, $is_claim:expr, $header:ident, $count:ident, $( $val:ident ),+ ) => {{
-        *$count = 0;
-        let mut cols = $header.finish_to_arrays($is_claim);
-        $( cols.push(Arc::new($val.finish())); )+
-        make_batch($schema, cols)
-    }};
-}
-
-// Macro to append header and increment count, with custom body for value columns
-macro_rules! append_with_header {
-    ($h:ident, $header:ident, $count:ident, $body:block) => {{
-        $h.append_to($header);
-        {
-            $body
-        }
-        *$count += 1;
-    }};
 }
 
 #[derive(Parser, Debug)]
@@ -277,7 +181,7 @@ impl Interner {
             existing
         } else {
             // Emit into entities via this thread's batcher
-            simple.entities_append(next, &id_owned);
+            simple.entities.append(next, &id_owned);
             next
         }
     }
@@ -348,6 +252,36 @@ impl ValueKind {
     }
 }
 
+enum ParsedValue<'a> {
+    NoSome,
+    String(&'a str),
+    EntityId(i64),
+    Time {
+        time: &'a str,
+        tz: i32,
+        before: i32,
+        after: i32,
+        precision: i32,
+        cal_id: i64,
+    },
+    Globe {
+        lat: f64,
+        lon: f64,
+        prec: Option<f64>,
+        globe_id: i64,
+    },
+    Mono {
+        lang: &'a str,
+        text: &'a str,
+    },
+    Quantity {
+        amount: f64,
+        lower: Option<f64>,
+        upper: Option<f64>,
+        unit_id: Option<i64>,
+    },
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct ClaimKey {
     ctype: ClaimType,
@@ -366,59 +300,6 @@ impl ClaimKey {
             vkind,
         }
     }
-}
-
-#[derive(Clone, Debug)]
-struct BaseClaim {
-    claim_id: i64,
-    rank: Rank,
-    entity_id: i64,
-    property_id: i64,
-    datatype: Option<String>,
-}
-#[derive(Clone, Debug)]
-struct BaseQual {
-    order: i32,
-    claim_id: i64,
-    property_id: i64,
-    datatype: Option<String>,
-}
-
-#[derive(Clone, Debug)]
-enum ValuePayload {
-    NoSome,
-    String(String),
-    EntityId(i64),
-    Time {
-        time: String,
-        tz: i32,
-        before: i32,
-        after: i32,
-        precision: i32,
-        cal_id: i64,
-    },
-    Globe {
-        lat: f64,
-        lon: f64,
-        precision: Option<f64>,
-        globe_id: i64,
-    },
-    Mono {
-        lang: String,
-        text: String,
-    },
-    Quantity {
-        amount: f64,
-        lower: Option<f64>,
-        upper: Option<f64>,
-        unit: Option<i64>,
-    },
-}
-
-#[allow(clippy::large_enum_variant)]
-struct Row {
-    header: HeaderIn,
-    payload: ValuePayload,
 }
 
 fn schema_for_value(vk: ValueKind, is_claim: bool) -> SchemaRef {
@@ -484,234 +365,6 @@ fn mk_claim_writer(base_dir: &Path, key: &ClaimKey) -> Result<ArrowWriter<File>>
     mk_writer(&path, schema)
 }
 
-// Header input that is independent from value type
-#[derive(Clone, Debug)]
-enum HeaderIn {
-    Claim(BaseClaim),
-    Sub(BaseQual),
-}
-
-impl HeaderIn {
-    fn append_to(&self, header: &mut ClaimHeadBuilder) {
-        match self {
-            HeaderIn::Claim(b) => header.append_claim(b),
-            HeaderIn::Sub(b) => header.append_sub(b),
-        }
-    }
-
-    fn to_row(&self, payload: ValuePayload) -> Row {
-        Row {
-            header: self.clone(),
-            payload,
-        }
-    }
-}
-
-async fn process_snak_value(
-    interner: &Interner,
-    simple: &mut SimpleBatchers,
-    builders: &mut HashMap<ClaimKey, ClaimBatchHolder>,
-    batch_size: usize,
-    ctype: ClaimType,
-    rank: Rank,
-    header: HeaderIn,
-    property_id: i64,
-    snak: &Value,
-) -> Result<()> {
-    // Small helper to append a row for a given value kind
-    let mut push_row = |vkind: ValueKind, payload: ValuePayload| {
-        let key = ClaimKey::new(ctype, rank, property_id, vkind);
-        let entry = builders
-            .entry(key.clone())
-            .or_insert_with(|| ClaimBatchHolder::new(&key, batch_size));
-        entry.append(header.to_row(payload));
-    };
-    let snaktype = req_str_opt(
-        snak.get("snaktype").and_then(|v| v.as_str()),
-        "snak missing 'snaktype'",
-        snak,
-    )?;
-    match snaktype {
-        "novalue" | "somevalue" => {
-            let vkind = if snaktype == "novalue" {
-                ValueKind::NoValue
-            } else {
-                ValueKind::SomeValue
-            };
-            push_row(vkind, ValuePayload::NoSome);
-        }
-        _ => {
-            let dv = snak.get("datavalue").with_context(|| {
-                format!(
-                    "snak missing 'datavalue' for value type; snak={}",
-                    json_snippet(snak)
-                )
-            })?;
-            let vtyp = req_str_opt(
-                dv.get("type").and_then(|v| v.as_str()),
-                "datavalue missing 'type'",
-                snak,
-            )?;
-            let v = dv.get("value").with_context(|| {
-                format!("datavalue missing 'value'; snak={}", json_snippet(snak))
-            })?;
-            match vtyp {
-                "string" => {
-                    let s =
-                        req_str_opt(v.as_str(), "string datavalue missing string 'value'", snak)?
-                            .to_string();
-                    push_row(ValueKind::String, ValuePayload::String(s));
-                }
-                "wikibase-entityid" => {
-                    let id = req_str_opt(
-                        v.get("id").and_then(|vv| vv.as_str()),
-                        "entityid datavalue missing 'id'",
-                        snak,
-                    )?;
-                    let eid = interner.get_or_insert(simple, id);
-                    push_row(ValueKind::EntityId, ValuePayload::EntityId(eid));
-                }
-                "time" => {
-                    let time = req_str_opt(
-                        v.get("time").and_then(|vv| vv.as_str()),
-                        "time datavalue missing 'time'",
-                        snak,
-                    )?
-                    .to_string();
-                    let tz = req_i64_opt(
-                        v.get("timezone").and_then(|vv| vv.as_i64()),
-                        "time datavalue missing 'timezone'",
-                        snak,
-                    )? as i32;
-                    let before = req_i64_opt(
-                        v.get("before").and_then(|vv| vv.as_i64()),
-                        "time datavalue missing 'before'",
-                        snak,
-                    )? as i32;
-                    let after = req_i64_opt(
-                        v.get("after").and_then(|vv| vv.as_i64()),
-                        "time datavalue missing 'after'",
-                        snak,
-                    )? as i32;
-                    let precision = req_i64_opt(
-                        v.get("precision").and_then(|vv| vv.as_i64()),
-                        "time datavalue missing 'precision'",
-                        snak,
-                    )? as i32;
-                    let cal = req_str_opt(
-                        v.get("calendarmodel")
-                            .and_then(|vv| vv.as_str())
-                            .map(strip_uri),
-                        "time datavalue missing 'calendarmodel'",
-                        snak,
-                    )?;
-                    let cal_id = intern_uri(interner, simple, cal);
-                    push_row(
-                        ValueKind::Time,
-                        ValuePayload::Time {
-                            time,
-                            tz,
-                            before,
-                            after,
-                            precision,
-                            cal_id,
-                        },
-                    );
-                }
-                "globecoordinate" => {
-                    let lat = req_f64_opt(
-                        v.get("latitude").and_then(|vv| vv.as_f64()),
-                        "globecoordinate missing 'latitude'",
-                        snak,
-                    )?;
-                    let lon = req_f64_opt(
-                        v.get("longitude").and_then(|vv| vv.as_f64()),
-                        "globecoordinate missing 'longitude'",
-                        snak,
-                    )?;
-                    let prec = v.get("precision").and_then(|vv| vv.as_f64());
-                    let globe = req_str_opt(
-                        v.get("globe").and_then(|vv| vv.as_str()).map(strip_uri),
-                        "globecoordinate missing 'globe'",
-                        snak,
-                    )?;
-                    let globe_id = intern_uri(interner, simple, globe);
-                    push_row(
-                        ValueKind::GlobeCoordinate,
-                        ValuePayload::Globe {
-                            lat,
-                            lon,
-                            precision: prec,
-                            globe_id,
-                        },
-                    );
-                }
-                "monolingualtext" => {
-                    let lang = req_str_opt(
-                        v.get("language").and_then(|vv| vv.as_str()),
-                        "monolingualtext missing 'language'",
-                        snak,
-                    )?
-                    .to_string();
-                    let text = req_str_opt(
-                        v.get("text").and_then(|vv| vv.as_str()),
-                        "monolingualtext missing 'text'",
-                        snak,
-                    )?
-                    .to_string();
-                    push_row(
-                        ValueKind::MonolingualText,
-                        ValuePayload::Mono { lang, text },
-                    );
-                }
-                "quantity" => {
-                    let amount = req_str_opt(
-                        v.get("amount").and_then(|vv| vv.as_str()),
-                        "quantity missing 'amount'",
-                        snak,
-                    )?
-                    .parse::<f64>()
-                    .with_context(|| {
-                        format!(
-                            "quantity 'amount' not a number'; snak={}",
-                            json_snippet(snak)
-                        )
-                    })?;
-                    let lower = v
-                        .get("lowerBound")
-                        .and_then(|vv| vv.as_str())
-                        .and_then(|s| s.parse::<f64>().ok());
-                    let upper = v
-                        .get("upperBound")
-                        .and_then(|vv| vv.as_str())
-                        .and_then(|s| s.parse::<f64>().ok());
-                    let unit = req_str_opt(
-                        v.get("unit").and_then(|vv| vv.as_str()),
-                        "quantity missing 'unit'",
-                        snak,
-                    )?;
-                    let unit_id = if unit == "1" {
-                        None
-                    } else {
-                        Some(intern_uri(interner, simple, unit))
-                    };
-                    push_row(
-                        ValueKind::Quantity,
-                        ValuePayload::Quantity {
-                            amount,
-                            lower,
-                            upper,
-                            unit: unit_id,
-                        },
-                    );
-                }
-                _ => {}
-            }
-        }
-    }
-    Ok(())
-}
-
 struct ClaimIdGen(AtomicI64);
 impl ClaimIdGen {
     fn new() -> Self {
@@ -722,76 +375,386 @@ impl ClaimIdGen {
     }
 }
 
-async fn process_entity(
-    json_line: &str,
-    interner: &Interner,
-    simple: &mut SimpleBatchers,
-    builders: &mut HashMap<ClaimKey, ClaimBatchHolder>,
-    claim_writers: &ClaimWriters,
-    batch_size: usize,
-    claim_ids: &ClaimIdGen,
-) -> Result<()> {
-    let obj: Value = match serde_json::from_str(json_line) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!(
-                "Warning: skipping unparseable entity JSON: {}; line={}",
-                e,
-                json_snippet(&Value::String(json_line.chars().take(200).collect()))
-            );
-            return Ok(());
-        }
-    };
-    let Some(id) = obj.get("id").and_then(|v| v.as_str()) else {
-        eprintln!(
-            "Warning: skipping entity missing 'id': {}",
-            json_snippet(&obj)
-        );
-        return Ok(());
-    };
-    let entity_id = interner.get_or_insert(simple, id);
+fn ordered_props<'a>(value: &'a Value, key: &str) -> Vec<&'a str> {
+    value
+        .get(key)
+        .and_then(|v| v.as_array())
+        .map(|items| items.iter().filter_map(|item| item.as_str()).collect())
+        .unwrap_or_default()
+}
 
-    if let Some(labels) = obj.get("labels").and_then(|v| v.as_object()) {
-        for (_k, v) in labels {
-            if let (Some(lang), Some(val)) = (
-                v.get("language").and_then(|x| x.as_str()),
-                v.get("value").and_then(|x| x.as_str()),
-            ) {
-                simple.labels_append(entity_id, lang, val);
-            }
+fn visit_lang_values(section: &serde_json::Map<String, Value>, mut visit: impl FnMut(&str, &str)) {
+    for value in section.values() {
+        if let (Some(lang), Some(text)) = (
+            value.get("language").and_then(|v| v.as_str()),
+            value.get("value").and_then(|v| v.as_str()),
+        ) {
+            visit(lang, text);
         }
     }
-    if let Some(aliases) = obj.get("aliases").and_then(|v| v.as_object()) {
-        for (_k, list) in aliases {
-            if let Some(arr) = list.as_array() {
-                for v in arr {
-                    if let (Some(lang), Some(val)) = (
-                        v.get("language").and_then(|x| x.as_str()),
-                        v.get("value").and_then(|x| x.as_str()),
-                    ) {
-                        simple.aliases_append(entity_id, lang, val);
-                    }
+}
+
+fn visit_lang_value_lists(
+    section: &serde_json::Map<String, Value>,
+    mut visit: impl FnMut(&str, &str),
+) {
+    for list in section.values() {
+        if let Some(items) = list.as_array() {
+            for value in items {
+                if let (Some(lang), Some(text)) = (
+                    value.get("language").and_then(|v| v.as_str()),
+                    value.get("value").and_then(|v| v.as_str()),
+                ) {
+                    visit(lang, text);
                 }
             }
         }
     }
-    if let Some(descriptions) = obj.get("descriptions").and_then(|v| v.as_object()) {
-        for (_k, v) in descriptions {
-            if let (Some(lang), Some(val)) = (
-                v.get("language").and_then(|x| x.as_str()),
-                v.get("value").and_then(|x| x.as_str()),
-            ) {
-                simple.descriptions_append(entity_id, lang, val);
+}
+
+struct WorkerState {
+    interner: Arc<Interner>,
+    simple: SimpleBatchers,
+    claim_builders: HashMap<ClaimKey, ClaimBatchBuilders>,
+    claim_writers: ClaimWriters,
+    batch_size: usize,
+    claim_ids: Arc<ClaimIdGen>,
+}
+
+impl WorkerState {
+    fn new(
+        batch_size: usize,
+        senders: SimpleWriterSenders,
+        interner: Arc<Interner>,
+        claim_writers: ClaimWriters,
+        claim_ids: Arc<ClaimIdGen>,
+    ) -> Self {
+        Self {
+            interner,
+            simple: SimpleBatchers::new(batch_size, senders),
+            claim_builders: HashMap::new(),
+            claim_writers,
+            batch_size,
+            claim_ids,
+        }
+    }
+
+    fn intern(&mut self, id: &str) -> i64 {
+        self.interner.get_or_insert(&mut self.simple, id)
+    }
+
+    fn intern_uri(&mut self, id: &str) -> i64 {
+        self.intern(strip_uri(id))
+    }
+
+    fn get_claim_builders(
+        &mut self,
+        ctype: ClaimType,
+        rank: Rank,
+        property_id: i64,
+        vkind: ValueKind,
+    ) -> &mut ClaimBatchBuilders {
+        let key = ClaimKey::new(ctype, rank, property_id, vkind);
+        let batch_size = self.batch_size;
+        self.claim_builders
+            .entry(key.clone())
+            .or_insert_with(|| ClaimBatchBuilders::new(&key, batch_size))
+    }
+
+    fn parse_snak<'a>(&mut self, snak: &'a Value) -> Result<Option<(ValueKind, ParsedValue<'a>)>> {
+        let snaktype = req_opt(
+            snak.get("snaktype").and_then(|v| v.as_str()),
+            "snak missing 'snaktype'",
+            snak,
+        )?;
+        match snaktype {
+            "novalue" => Ok(Some((ValueKind::NoValue, ParsedValue::NoSome))),
+            "somevalue" => Ok(Some((ValueKind::SomeValue, ParsedValue::NoSome))),
+            _ => {
+                let dv = snak.get("datavalue").with_context(|| {
+                    format!(
+                        "snak missing 'datavalue' for value type; snak={}",
+                        json_snippet(snak)
+                    )
+                })?;
+                let value_type = req_opt(
+                    dv.get("type").and_then(|v| v.as_str()),
+                    "datavalue missing 'type'",
+                    snak,
+                )?;
+                let value = dv.get("value").with_context(|| {
+                    format!("datavalue missing 'value'; snak={}", json_snippet(snak))
+                })?;
+                match value_type {
+                    "string" => {
+                        let s = req_opt(
+                            value.as_str(),
+                            "string datavalue missing string 'value'",
+                            snak,
+                        )?;
+                        Ok(Some((ValueKind::String, ParsedValue::String(s))))
+                    }
+                    "wikibase-entityid" => {
+                        let id = req_opt(
+                            value.get("id").and_then(|v| v.as_str()),
+                            "entityid datavalue missing 'id'",
+                            snak,
+                        )?;
+                        let eid = self.intern(id);
+                        Ok(Some((ValueKind::EntityId, ParsedValue::EntityId(eid))))
+                    }
+                    "time" => {
+                        let time = req_opt(
+                            value.get("time").and_then(|v| v.as_str()),
+                            "time datavalue missing 'time'",
+                            snak,
+                        )?;
+                        let tz = req_opt(
+                            value.get("timezone").and_then(|v| v.as_i64()),
+                            "time datavalue missing 'timezone'",
+                            snak,
+                        )? as i32;
+                        let before = req_opt(
+                            value.get("before").and_then(|v| v.as_i64()),
+                            "time datavalue missing 'before'",
+                            snak,
+                        )? as i32;
+                        let after = req_opt(
+                            value.get("after").and_then(|v| v.as_i64()),
+                            "time datavalue missing 'after'",
+                            snak,
+                        )? as i32;
+                        let precision = req_opt(
+                            value.get("precision").and_then(|v| v.as_i64()),
+                            "time datavalue missing 'precision'",
+                            snak,
+                        )? as i32;
+                        let cal_id = self.intern(req_opt(
+                            value
+                                .get("calendarmodel")
+                                .and_then(|v| v.as_str())
+                                .map(strip_uri),
+                            "time datavalue missing 'calendarmodel'",
+                            snak,
+                        )?);
+                        Ok(Some((
+                            ValueKind::Time,
+                            ParsedValue::Time {
+                                time,
+                                tz,
+                                before,
+                                after,
+                                precision,
+                                cal_id,
+                            },
+                        )))
+                    }
+                    "globecoordinate" => {
+                        let lat = req_opt(
+                            value.get("latitude").and_then(|v| v.as_f64()),
+                            "globecoordinate missing 'latitude'",
+                            snak,
+                        )?;
+                        let lon = req_opt(
+                            value.get("longitude").and_then(|v| v.as_f64()),
+                            "globecoordinate missing 'longitude'",
+                            snak,
+                        )?;
+                        let prec = value.get("precision").and_then(|v| v.as_f64());
+                        let globe_id = self.intern(req_opt(
+                            value.get("globe").and_then(|v| v.as_str()).map(strip_uri),
+                            "globecoordinate missing 'globe'",
+                            snak,
+                        )?);
+                        Ok(Some((
+                            ValueKind::GlobeCoordinate,
+                            ParsedValue::Globe {
+                                lat,
+                                lon,
+                                prec,
+                                globe_id,
+                            },
+                        )))
+                    }
+                    "monolingualtext" => {
+                        let lang = req_opt(
+                            value.get("language").and_then(|v| v.as_str()),
+                            "monolingualtext missing 'language'",
+                            snak,
+                        )?;
+                        let text = req_opt(
+                            value.get("text").and_then(|v| v.as_str()),
+                            "monolingualtext missing 'text'",
+                            snak,
+                        )?;
+                        Ok(Some((
+                            ValueKind::MonolingualText,
+                            ParsedValue::Mono { lang, text },
+                        )))
+                    }
+                    "quantity" => {
+                        let amount = req_opt(
+                            value.get("amount").and_then(|v| v.as_str()),
+                            "quantity missing 'amount'",
+                            snak,
+                        )?
+                        .parse::<f64>()
+                        .with_context(|| {
+                            format!(
+                                "quantity 'amount' not a number'; snak={}",
+                                json_snippet(snak)
+                            )
+                        })?;
+                        let lower = value
+                            .get("lowerBound")
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| s.parse::<f64>().ok());
+                        let upper = value
+                            .get("upperBound")
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| s.parse::<f64>().ok());
+                        let unit = req_opt(
+                            value.get("unit").and_then(|v| v.as_str()),
+                            "quantity missing 'unit'",
+                            snak,
+                        )?;
+                        let unit_id = if unit == "1" {
+                            None
+                        } else {
+                            Some(self.intern_uri(unit))
+                        };
+                        Ok(Some((
+                            ValueKind::Quantity,
+                            ParsedValue::Quantity {
+                                amount,
+                                lower,
+                                upper,
+                                unit_id,
+                            },
+                        )))
+                    }
+                    _ => Ok(None),
+                }
             }
         }
     }
-    if let Some(datatype) = obj.get("datatype").and_then(|v| v.as_str()) {
-        simple.datatypes_append(entity_id, datatype);
+
+    fn process_snak_value(
+        &mut self,
+        ctype: ClaimType,
+        rank: Rank,
+        claim_id: i64,
+        entity_id: i64,
+        order: i32,
+        property_id: i64,
+        datatype: Option<&str>,
+        snak: &Value,
+    ) -> Result<()> {
+        let Some((vkind, parsed)) = self.parse_snak(snak)? else {
+            return Ok(());
+        };
+        let holder = self.get_claim_builders(ctype, rank, property_id, vkind);
+        holder.append_header(claim_id, entity_id, order, property_id, datatype);
+        holder.values_mut().append_parsed(&parsed);
+        Ok(())
     }
 
-    if let Some(claims) = obj.get("claims").and_then(|v| v.as_object()) {
-        for (_p, arr) in claims {
-            if let Some(claim_list) = arr.as_array() {
+    fn process_sub_snaks(
+        &mut self,
+        ctype: ClaimType,
+        claim_id: i64,
+        order_list: &[&str],
+        snaks: &serde_json::Map<String, Value>,
+    ) {
+        for (prop, arr) in snaks {
+            let Some(items) = arr.as_array() else {
+                continue;
+            };
+            let order = order_of(order_list, prop);
+            let property_id = self.intern(prop);
+            for snak in items {
+                let dt = snak.get("datatype").and_then(|v| v.as_str());
+                if let Err(e) = self.process_snak_value(
+                    ctype,
+                    Rank::Normal,
+                    claim_id,
+                    0,
+                    order,
+                    property_id,
+                    dt,
+                    snak,
+                ) {
+                    eprintln!(
+                        "Warning: skipping {} snak due to error: {:#}",
+                        ctype.as_str(),
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    fn process_sitelinks(&mut self, entity_id: i64, sitelinks: &serde_json::Map<String, Value>) {
+        for value in sitelinks.values() {
+            let site = value.get("site").and_then(|v| v.as_str());
+            if let (Some(site), Some(title)) = (site, value.get("title").and_then(|v| v.as_str())) {
+                self.simple.sitelinks.append(entity_id, site, title);
+            }
+            if let (Some(site), Some(badges)) =
+                (site, value.get("badges").and_then(|v| v.as_array()))
+            {
+                for badge in badges.iter().filter_map(|badge| badge.as_str()) {
+                    let badge_id = self.intern(badge);
+                    self.simple
+                        .sitelink_badges
+                        .append(entity_id, site, badge_id);
+                }
+            }
+        }
+    }
+
+    async fn process_entity(&mut self, json_line: &str) -> Result<()> {
+        let obj: Value = match serde_json::from_str(json_line) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!(
+                    "Warning: skipping unparseable entity JSON: {}; line={}",
+                    e,
+                    json_snippet(&Value::String(json_line.chars().take(200).collect()))
+                );
+                return Ok(());
+            }
+        };
+        let Some(id) = obj.get("id").and_then(|v| v.as_str()) else {
+            eprintln!(
+                "Warning: skipping entity missing 'id': {}",
+                json_snippet(&obj)
+            );
+            return Ok(());
+        };
+        let entity_id = self.intern(id);
+
+        if let Some(labels) = obj.get("labels").and_then(|v| v.as_object()) {
+            visit_lang_values(labels, |lang, value| {
+                self.simple.labels.append(entity_id, lang, value)
+            });
+        }
+        if let Some(aliases) = obj.get("aliases").and_then(|v| v.as_object()) {
+            visit_lang_value_lists(aliases, |lang, value| {
+                self.simple.aliases.append(entity_id, lang, value);
+            });
+        }
+        if let Some(descriptions) = obj.get("descriptions").and_then(|v| v.as_object()) {
+            visit_lang_values(descriptions, |lang, value| {
+                self.simple.descriptions.append(entity_id, lang, value);
+            });
+        }
+        if let Some(datatype) = obj.get("datatype").and_then(|v| v.as_str()) {
+            self.simple.datatypes.append(entity_id, datatype);
+        }
+
+        if let Some(claims) = obj.get("claims").and_then(|v| v.as_object()) {
+            for claim_list in claims.values().filter_map(|v| v.as_array()) {
                 for claim in claim_list {
                     let Some(rank_str) = claim.get("rank").and_then(|v| v.as_str()) else {
                         eprintln!(
@@ -815,157 +778,68 @@ async fn process_entity(
                         );
                         continue;
                     };
-                    let property_id = interner.get_or_insert(simple, property);
-                    let datatype = mainsnak
-                        .get("datatype")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
-
-                    let claim_id = claim_ids.next();
-                    let base = BaseClaim {
-                        claim_id,
-                        rank,
-                        entity_id,
-                        property_id,
-                        datatype,
-                    };
-                    if let Err(e) = process_snak_value(
-                        interner,
-                        simple,
-                        builders,
-                        batch_size,
+                    let claim_id = self.claim_ids.next();
+                    let prop_id = self.intern(property);
+                    let dt = mainsnak.get("datatype").and_then(|v| v.as_str());
+                    if let Err(e) = self.process_snak_value(
                         ClaimType::Claim,
                         rank,
-                        HeaderIn::Claim(base),
-                        property_id,
+                        claim_id,
+                        entity_id,
+                        0,
+                        prop_id,
+                        dt,
                         mainsnak,
-                    )
-                    .await
-                    {
+                    ) {
                         eprintln!("Warning: skipping claim snak due to error: {:#}", e);
                     }
 
-                    if let Some(quals) = claim.get("qualifiers").and_then(|v| v.as_object()) {
-                        let order_list: Vec<&str> = claim
-                            .get("qualifiers-order")
-                            .and_then(|v| v.as_array())
-                            .map(|a| a.iter().filter_map(|x| x.as_str()).collect())
-                            .unwrap();
-                        for (prop, list) in quals {
-                            if let Some(arr) = list.as_array() {
-                                for qualifier in arr {
-                                    let order = order_of(&order_list, prop);
-                                    let qdatatype = qualifier
-                                        .get("datatype")
-                                        .and_then(|v| v.as_str())
-                                        .map(|s| s.to_string());
-                                    let qprop_id = property_id;
-                                    let base = BaseQual {
-                                        order,
-                                        claim_id,
-                                        property_id: qprop_id,
-                                        datatype: qdatatype,
-                                    };
-                                    if let Err(e) = process_snak_value(
-                                        interner,
-                                        simple,
-                                        builders,
-                                        batch_size,
-                                        ClaimType::Qualifier,
-                                        Rank::Normal,
-                                        HeaderIn::Sub(base),
-                                        property_id,
-                                        qualifier,
-                                    )
-                                    .await
-                                    {
-                                        eprintln!(
-                                            "Warning: skipping qualifier snak due to error: {:#}",
-                                            e
-                                        );
-                                    }
-                                }
-                            }
-                        }
+                    if let Some(qualifiers) = claim.get("qualifiers").and_then(|v| v.as_object()) {
+                        let order_list = ordered_props(claim, "qualifiers-order");
+                        self.process_sub_snaks(
+                            ClaimType::Qualifier,
+                            claim_id,
+                            &order_list,
+                            qualifiers,
+                        );
                     }
 
-                    if let Some(refs) = claim.get("references").and_then(|v| v.as_array()) {
-                        for r in refs {
-                            let snaks_order: Vec<&str> = r
-                                .get("snaks-order")
-                                .and_then(|v| v.as_array())
-                                .map(|a| a.iter().filter_map(|x| x.as_str()).collect())
-                                .unwrap();
-                            if let Some(snaks) = r.get("snaks").and_then(|v| v.as_object()) {
-                                for (prop, arr) in snaks {
-                                    if let Some(ar) = arr.as_array() {
-                                        for snak in ar {
-                                            let order = order_of(&snaks_order, prop);
-                                            let qdatatype = snak
-                                                .get("datatype")
-                                                .and_then(|v| v.as_str())
-                                                .map(|s| s.to_string());
-                                            let base = BaseQual {
-                                                order,
-                                                claim_id,
-                                                property_id,
-                                                datatype: qdatatype,
-                                            };
-                                            if let Err(e) = process_snak_value(
-                                                interner,
-                                                simple,
-                                                builders,
-                                                batch_size,
-                                                ClaimType::Reference,
-                                                Rank::Normal,
-                                                HeaderIn::Sub(base),
-                                                property_id,
-                                                snak,
-                                            )
-                                            .await
-                                            {
-                                                eprintln!(
-                                                    "Warning: skipping reference snak due to error: {:#}",
-                                                    e
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
+                    if let Some(references) = claim.get("references").and_then(|v| v.as_array()) {
+                        for reference in references {
+                            if let Some(snaks) = reference.get("snaks").and_then(|v| v.as_object())
+                            {
+                                let order_list = ordered_props(reference, "snaks-order");
+                                self.process_sub_snaks(
+                                    ClaimType::Reference,
+                                    claim_id,
+                                    &order_list,
+                                    snaks,
+                                );
                             }
                         }
                     }
                 }
             }
         }
-    }
 
-    if let Some(sitelinks) = obj.get("sitelinks").and_then(|v| v.as_object()) {
-        for (_k, v) in sitelinks {
-            if let Some(site) = v.get("site").and_then(|v| v.as_str()) {
-                if let Some(title) = v.get("title").and_then(|v| v.as_str()) {
-                    simple.sitelinks_append(entity_id, site, title);
-                }
-            }
-            if let Some(badges) = v.get("badges").and_then(|v| v.as_array()) {
-                for b in badges {
-                    if let Some(badge) = b.as_str() {
-                        let bid = interner.get_or_insert(simple, badge);
-                        if let Some(site) = v.get("site").and_then(|v| v.as_str()) {
-                            simple.sitelink_badges_append(entity_id, site, bid);
-                        }
-                    }
-                }
-            }
+        if let Some(sitelinks) = obj.get("sitelinks").and_then(|v| v.as_object()) {
+            self.process_sitelinks(entity_id, sitelinks);
         }
+
+        for entry in self.claim_builders.values_mut() {
+            entry.flush_if_needed_send(&self.claim_writers).await?;
+        }
+        self.simple.flush_async(false).await?;
+        Ok(())
     }
 
-    for (_key, entry) in builders.iter_mut() {
-        entry.flush_if_needed_send(claim_writers).await?;
+    async fn finish(mut self) -> Result<()> {
+        for entry in std::mem::take(&mut self.claim_builders).into_values() {
+            entry.finalize_and_send_all(&self.claim_writers).await?;
+        }
+        self.simple.flush_async(true).await?;
+        Ok(())
     }
-    simple.flush_if_needed_async().await?;
-
-    Ok(())
 }
 
 // Unified header builders reused across claim/qualifier/reference
@@ -1004,7 +878,7 @@ impl ClaimHeadBuilder {
         }
     }
 
-    fn append_claim(&mut self, b: &BaseClaim) {
+    fn finish_to_arrays(&mut self) -> Vec<Arc<dyn arrow::array::Array>> {
         match self {
             ClaimHeadBuilder::Claim {
                 claim_id,
@@ -1013,41 +887,6 @@ impl ClaimHeadBuilder {
                 property_id,
                 datatype,
             } => {
-                push_claim_header!(claim_id, rank, entity_id, property_id, datatype, b);
-            }
-            ClaimHeadBuilder::Sub { .. } => unreachable!("header kind mismatch: expected Claim"),
-        }
-    }
-
-    fn append_sub(&mut self, b: &BaseQual) {
-        match self {
-            ClaimHeadBuilder::Sub {
-                order,
-                claim_id,
-                property_id,
-                datatype,
-            } => {
-                push_qual_header!(order, claim_id, property_id, datatype, b);
-            }
-            ClaimHeadBuilder::Claim { .. } => unreachable!("header kind mismatch: expected Sub"),
-        }
-    }
-
-    fn finish_to_arrays(&mut self, is_claim: bool) -> Vec<Arc<dyn arrow::array::Array>> {
-        // Note: The order of arrays returned here MUST match schema_for_value's
-        // header column ordering for the respective path (claim vs sub). Value
-        // columns are appended by ClaimBatchBuilders::finish_to_batch afterwards.
-        match (is_claim, self) {
-            (
-                true,
-                ClaimHeadBuilder::Claim {
-                    claim_id,
-                    rank,
-                    entity_id,
-                    property_id,
-                    datatype,
-                },
-            ) => {
                 vec![
                     Arc::new(claim_id.finish()),
                     Arc::new(rank.finish()),
@@ -1056,15 +895,12 @@ impl ClaimHeadBuilder {
                     Arc::new(datatype.finish()),
                 ]
             }
-            (
-                false,
-                ClaimHeadBuilder::Sub {
-                    order,
-                    claim_id,
-                    property_id,
-                    datatype,
-                },
-            ) => {
+            ClaimHeadBuilder::Sub {
+                order,
+                claim_id,
+                property_id,
+                datatype,
+            } => {
                 vec![
                     Arc::new(order.finish()),
                     Arc::new(claim_id.finish()),
@@ -1072,343 +908,328 @@ impl ClaimHeadBuilder {
                     Arc::new(datatype.finish()),
                 ]
             }
-            (true, ClaimHeadBuilder::Sub { .. }) => {
-                unreachable!("header type mismatch: sub used for claim schema")
+        }
+    }
+
+    fn append(
+        &mut self,
+        claim_id: i64,
+        rank: &str,
+        entity_id: i64,
+        order: i32,
+        property_id: i64,
+        datatype: Option<&str>,
+    ) {
+        match self {
+            ClaimHeadBuilder::Claim {
+                claim_id: c,
+                rank: r,
+                entity_id: e,
+                property_id: p,
+                datatype: d,
+            } => {
+                c.append_value(claim_id);
+                r.append_value(rank);
+                e.append_value(entity_id);
+                p.append_value(property_id);
+                d.append_option(datatype);
             }
-            (false, ClaimHeadBuilder::Claim { .. }) => {
-                unreachable!("header type mismatch: claim used for sub schema")
+            ClaimHeadBuilder::Sub {
+                order: o,
+                claim_id: c,
+                property_id: p,
+                datatype: d,
+            } => {
+                o.append_value(order);
+                c.append_value(claim_id);
+                p.append_value(property_id);
+                d.append_option(datatype);
             }
         }
     }
 }
 
-// Single set of value builders, with shared header builders
-enum ClaimBatchBuilders {
-    NoSome {
-        header: ClaimHeadBuilder,
-        count: usize,
-    },
+// Value-specific builders only
+enum ValueBuilders {
+    NoSome,
     String {
-        header: ClaimHeadBuilder,
         value: StringBuilder,
-        count: usize,
     },
     EntityId {
-        header: ClaimHeadBuilder,
         value_entity_id: Int64Builder,
-        count: usize,
     },
     Time {
-        header: ClaimHeadBuilder,
         time: StringBuilder,
         timezone: Int32Builder,
         before: Int32Builder,
         after: Int32Builder,
         precision: Int32Builder,
         calendarmodel_entity_id: Int64Builder,
-        count: usize,
     },
     Globe {
-        header: ClaimHeadBuilder,
         latitude: Float64Builder,
         longitude: Float64Builder,
         precision: Float64Builder,
         globe_entity_id: Int64Builder,
-        count: usize,
     },
     Mono {
-        header: ClaimHeadBuilder,
         language: StringBuilder,
         text: StringBuilder,
-        count: usize,
     },
     Quantity {
-        header: ClaimHeadBuilder,
         amount: Float64Builder,
         lower_bound: Float64Builder,
         upper_bound: Float64Builder,
         unit_entity_id: Int64Builder,
-        count: usize,
     },
 }
 
+impl ValueBuilders {
+    fn append_parsed(&mut self, pv: &ParsedValue) {
+        match (self, pv) {
+            (ValueBuilders::NoSome, ParsedValue::NoSome) => {}
+            (ValueBuilders::String { value }, ParsedValue::String(s)) => {
+                value.append_value(s);
+            }
+            (ValueBuilders::EntityId { value_entity_id }, ParsedValue::EntityId(eid)) => {
+                value_entity_id.append_value(*eid);
+            }
+            (
+                ValueBuilders::Time {
+                    time,
+                    timezone,
+                    before,
+                    after,
+                    precision,
+                    calendarmodel_entity_id,
+                },
+                ParsedValue::Time {
+                    time: t,
+                    tz,
+                    before: bf,
+                    after: af,
+                    precision: pr,
+                    cal_id,
+                },
+            ) => {
+                time.append_value(t);
+                timezone.append_value(*tz);
+                before.append_value(*bf);
+                after.append_value(*af);
+                precision.append_value(*pr);
+                calendarmodel_entity_id.append_value(*cal_id);
+            }
+            (
+                ValueBuilders::Globe {
+                    latitude,
+                    longitude,
+                    precision,
+                    globe_entity_id,
+                },
+                ParsedValue::Globe {
+                    lat,
+                    lon,
+                    prec,
+                    globe_id,
+                },
+            ) => {
+                latitude.append_value(*lat);
+                longitude.append_value(*lon);
+                precision.append_option(*prec);
+                globe_entity_id.append_value(*globe_id);
+            }
+            (ValueBuilders::Mono { language, text }, ParsedValue::Mono { lang, text: t }) => {
+                language.append_value(lang);
+                text.append_value(t);
+            }
+            (
+                ValueBuilders::Quantity {
+                    amount,
+                    lower_bound,
+                    upper_bound,
+                    unit_entity_id,
+                },
+                ParsedValue::Quantity {
+                    amount: a,
+                    lower,
+                    upper,
+                    unit_id,
+                },
+            ) => {
+                amount.append_value(*a);
+                lower_bound.append_option(*lower);
+                upper_bound.append_option(*upper);
+                unit_entity_id.append_option(*unit_id);
+            }
+            _ => unreachable!("value type mismatch"),
+        }
+    }
+
+    fn finish_to_arrays(&mut self) -> Vec<Arc<dyn arrow::array::Array>> {
+        match self {
+            ValueBuilders::NoSome => vec![],
+            ValueBuilders::String { value } => {
+                vec![Arc::new(value.finish())]
+            }
+            ValueBuilders::EntityId { value_entity_id } => {
+                vec![Arc::new(value_entity_id.finish())]
+            }
+            ValueBuilders::Time {
+                time,
+                timezone,
+                before,
+                after,
+                precision,
+                calendarmodel_entity_id,
+            } => {
+                vec![
+                    Arc::new(time.finish()),
+                    Arc::new(timezone.finish()),
+                    Arc::new(before.finish()),
+                    Arc::new(after.finish()),
+                    Arc::new(precision.finish()),
+                    Arc::new(calendarmodel_entity_id.finish()),
+                ]
+            }
+            ValueBuilders::Globe {
+                latitude,
+                longitude,
+                precision,
+                globe_entity_id,
+            } => {
+                vec![
+                    Arc::new(latitude.finish()),
+                    Arc::new(longitude.finish()),
+                    Arc::new(precision.finish()),
+                    Arc::new(globe_entity_id.finish()),
+                ]
+            }
+            ValueBuilders::Mono { language, text } => {
+                vec![Arc::new(language.finish()), Arc::new(text.finish())]
+            }
+            ValueBuilders::Quantity {
+                amount,
+                lower_bound,
+                upper_bound,
+                unit_entity_id,
+            } => {
+                vec![
+                    Arc::new(amount.finish()),
+                    Arc::new(lower_bound.finish()),
+                    Arc::new(upper_bound.finish()),
+                    Arc::new(unit_entity_id.finish()),
+                ]
+            }
+        }
+    }
+}
+
+// Claim batch builders with shared header and count
+struct ClaimBatchBuilders {
+    key: ClaimKey,
+    schema: SchemaRef,
+    batch_size: usize,
+    header: ClaimHeadBuilder,
+    count: usize,
+    values: ValueBuilders,
+}
+
 impl ClaimBatchBuilders {
-    fn new(key: &ClaimKey) -> Self {
+    fn new(key: &ClaimKey, batch_size: usize) -> Self {
         let header = ClaimHeadBuilder::new(key.ctype);
-        match key.vkind {
-            ValueKind::NoValue | ValueKind::SomeValue => Self::NoSome { header, count: 0 },
-            ValueKind::String => Self::String {
-                header,
+        let values = match key.vkind {
+            ValueKind::NoValue | ValueKind::SomeValue => ValueBuilders::NoSome,
+            ValueKind::String => ValueBuilders::String {
                 value: StringBuilder::new(),
-                count: 0,
             },
-            ValueKind::EntityId => Self::EntityId {
-                header,
+            ValueKind::EntityId => ValueBuilders::EntityId {
                 value_entity_id: Int64Builder::new(),
-                count: 0,
             },
-            ValueKind::Time => Self::Time {
-                header,
+            ValueKind::Time => ValueBuilders::Time {
                 time: StringBuilder::new(),
                 timezone: Int32Builder::new(),
                 before: Int32Builder::new(),
                 after: Int32Builder::new(),
                 precision: Int32Builder::new(),
                 calendarmodel_entity_id: Int64Builder::new(),
-                count: 0,
             },
-            ValueKind::GlobeCoordinate => Self::Globe {
-                header,
+            ValueKind::GlobeCoordinate => ValueBuilders::Globe {
                 latitude: Float64Builder::new(),
                 longitude: Float64Builder::new(),
                 precision: Float64Builder::new(),
                 globe_entity_id: Int64Builder::new(),
-                count: 0,
             },
-            ValueKind::MonolingualText => Self::Mono {
-                header,
+            ValueKind::MonolingualText => ValueBuilders::Mono {
                 language: StringBuilder::new(),
                 text: StringBuilder::new(),
-                count: 0,
             },
-            ValueKind::Quantity => Self::Quantity {
-                header,
+            ValueKind::Quantity => ValueBuilders::Quantity {
                 amount: Float64Builder::new(),
                 lower_bound: Float64Builder::new(),
                 upper_bound: Float64Builder::new(),
                 unit_entity_id: Int64Builder::new(),
-                count: 0,
             },
+        };
+        let is_claim = matches!(key.ctype, ClaimType::Claim);
+        let schema = schema_for_value(key.vkind, is_claim);
+        Self {
+            key: key.clone(),
+            schema,
+            batch_size,
+            header,
+            count: 0,
+            values,
         }
     }
 
-    fn append(&mut self, row: Row) {
-        let Row { header: h, payload } = row;
-        match self {
-            Self::NoSome { header, count } => match payload {
-                ValuePayload::NoSome => {
-                    append_with_header!(h, header, count, {});
-                }
-                _ => unreachable!("payload type mismatch for NoSome batch"),
-            },
-            Self::String {
-                header,
-                value,
-                count,
-            } => match payload {
-                ValuePayload::String(v) => {
-                    append_with_header!(h, header, count, {
-                        value.append_value(&v);
-                    });
-                }
-                _ => unreachable!("payload type mismatch for String batch"),
-            },
-            Self::EntityId {
-                header,
-                value_entity_id,
-                count,
-            } => match payload {
-                ValuePayload::EntityId(v) => {
-                    append_with_header!(h, header, count, {
-                        value_entity_id.append_value(v);
-                    });
-                }
-                _ => unreachable!("payload type mismatch for EntityId batch"),
-            },
-            Self::Time {
-                header,
-                time,
-                timezone,
-                before,
-                after,
-                precision,
-                calendarmodel_entity_id,
-                count,
-            } => match payload {
-                ValuePayload::Time {
-                    time: t,
-                    tz,
-                    before: bf,
-                    after: af,
-                    precision: pr,
-                    cal_id: cal,
-                } => {
-                    append_with_header!(h, header, count, {
-                        time.append_value(&t);
-                        timezone.append_value(tz);
-                        before.append_value(bf);
-                        after.append_value(af);
-                        precision.append_value(pr);
-                        calendarmodel_entity_id.append_value(cal);
-                    });
-                }
-                _ => unreachable!("payload type mismatch for Time batch"),
-            },
-            Self::Globe {
-                header,
-                latitude,
-                longitude,
-                precision,
-                globe_entity_id,
-                count,
-            } => match payload {
-                ValuePayload::Globe {
-                    lat,
-                    lon,
-                    precision: prec,
-                    globe_id: globe,
-                } => {
-                    append_with_header!(h, header, count, {
-                        latitude.append_value(lat);
-                        longitude.append_value(lon);
-                        push_opt_f64(precision, prec);
-                        globe_entity_id.append_value(globe);
-                    });
-                }
-                _ => unreachable!("payload type mismatch for Globe batch"),
-            },
-            Self::Mono {
-                header,
-                language,
-                text,
-                count,
-            } => match payload {
-                ValuePayload::Mono { lang, text: t } => {
-                    append_with_header!(h, header, count, {
-                        language.append_value(&lang);
-                        text.append_value(&t);
-                    });
-                }
-                _ => unreachable!("payload type mismatch for Mono batch"),
-            },
-            Self::Quantity {
-                header,
-                amount,
-                lower_bound,
-                upper_bound,
-                unit_entity_id,
-                count,
-            } => match payload {
-                ValuePayload::Quantity {
-                    amount: a,
-                    lower: lb,
-                    upper: ub,
-                    unit,
-                } => {
-                    append_with_header!(h, header, count, {
-                        amount.append_value(a);
-                        push_opt_f64(lower_bound, lb);
-                        push_opt_f64(upper_bound, ub);
-                        push_opt_i64(unit_entity_id, unit);
-                    });
-                }
-                _ => unreachable!("payload type mismatch for Quantity batch"),
-            },
-        }
+    fn append_header(
+        &mut self,
+        claim_id: i64,
+        entity_id: i64,
+        order: i32,
+        property_id: i64,
+        datatype: Option<&str>,
+    ) {
+        self.count += 1;
+        self.header.append(
+            claim_id,
+            self.key.rank.as_str(),
+            entity_id,
+            order,
+            property_id,
+            datatype,
+        );
     }
 
     fn is_empty(&self) -> bool {
-        match self {
-            Self::NoSome { count, .. }
-            | Self::String { count, .. }
-            | Self::EntityId { count, .. }
-            | Self::Time { count, .. }
-            | Self::Globe { count, .. }
-            | Self::Mono { count, .. }
-            | Self::Quantity { count, .. } => *count == 0,
-        }
+        self.count == 0
     }
 
-    fn len(&self) -> usize {
-        match self {
-            Self::NoSome { count, .. }
-            | Self::String { count, .. }
-            | Self::EntityId { count, .. }
-            | Self::Time { count, .. }
-            | Self::Globe { count, .. }
-            | Self::Mono { count, .. }
-            | Self::Quantity { count, .. } => *count,
-        }
+    fn finish_to_batch(&mut self) -> Result<RecordBatch> {
+        self.count = 0;
+        let mut cols = self.header.finish_to_arrays();
+        cols.extend(self.values.finish_to_arrays());
+        Ok(RecordBatch::try_new(self.schema.clone(), cols)?)
     }
 
-    fn finish_to_batch(&mut self, key: &ClaimKey) -> Result<RecordBatch> {
-        let is_claim = matches!(key.ctype, ClaimType::Claim);
-        let schema = schema_for_value(key.vkind, is_claim);
-        let batch = match self {
-            Self::NoSome { header, count } => finish_claim_batch!(schema, is_claim, header, count)?,
-            Self::String {
-                header,
-                value,
-                count,
-            } => finish_claim_batch!(schema, is_claim, header, count, value)?,
-            Self::EntityId {
-                header,
-                value_entity_id,
-                count,
-            } => finish_claim_batch!(schema, is_claim, header, count, value_entity_id)?,
-            Self::Time {
-                header,
-                time,
-                timezone,
-                before,
-                after,
-                precision,
-                calendarmodel_entity_id,
-                count,
-            } => finish_claim_batch!(
-                schema,
-                is_claim,
-                header,
-                count,
-                time,
-                timezone,
-                before,
-                after,
-                precision,
-                calendarmodel_entity_id
-            )?,
-            Self::Globe {
-                header,
-                latitude,
-                longitude,
-                precision,
-                globe_entity_id,
-                count,
-            } => finish_claim_batch!(
-                schema,
-                is_claim,
-                header,
-                count,
-                latitude,
-                longitude,
-                precision,
-                globe_entity_id
-            )?,
-            Self::Mono {
-                header,
-                language,
-                text,
-                count,
-            } => finish_claim_batch!(schema, is_claim, header, count, language, text)?,
-            Self::Quantity {
-                header,
-                amount,
-                lower_bound,
-                upper_bound,
-                unit_entity_id,
-                count,
-            } => finish_claim_batch!(
-                schema,
-                is_claim,
-                header,
-                count,
-                amount,
-                lower_bound,
-                upper_bound,
-                unit_entity_id
-            )?,
-        };
-        Ok(batch)
+    fn values_mut(&mut self) -> &mut ValueBuilders {
+        &mut self.values
+    }
+
+    async fn flush_if_needed_send(&mut self, writers: &ClaimWriters) -> Result<()> {
+        if self.count >= self.batch_size {
+            let batch = self.finish_to_batch()?;
+            writers.send(self.key.clone(), batch).await?;
+        }
+        Ok(())
+    }
+
+    async fn finalize_and_send_all(mut self, writers: &ClaimWriters) -> Result<()> {
+        if !self.is_empty() {
+            let batch = self.finish_to_batch()?;
+            writers.send(self.key, batch).await?;
+        }
+        Ok(())
     }
 }
 
@@ -1417,7 +1238,6 @@ async fn run_claim_writer(
     base_dir: PathBuf,
     key: ClaimKey,
     mut rx: Receiver<RecordBatch>,
-    _batch_size: usize,
 ) -> Result<()> {
     let mut writer = mk_claim_writer(&base_dir, &key)?;
     while let Some(batch) = rx.recv().await {
@@ -1427,14 +1247,8 @@ async fn run_claim_writer(
     Ok(())
 }
 
-struct ClaimBatchEvent {
-    key: ClaimKey,
-    batch: RecordBatch,
-}
-
 struct ClaimWritersInner {
     base_dir: PathBuf,
-    batch_size: usize,
     senders: HashMap<ClaimKey, Sender<RecordBatch>>,
     handles: Vec<JoinHandle<Result<()>>>,
 }
@@ -1470,350 +1284,192 @@ fn spawn_simple_writer(
     )));
 }
 
-// Parser-side simple dataset batchers: build batches and send only when checked
+fn make_simple_writer(
+    tasks: &mut Vec<JoinHandle<Result<()>>>,
+    base_dir: &Path,
+    name: &str,
+    schema: fn() -> SchemaRef,
+) -> Sender<RecordBatch> {
+    let (tx, rx) = mpsc::channel::<RecordBatch>(READY_BATCHES_BUFFER);
+    spawn_simple_writer(tasks, base_dir, name, rx, schema());
+    tx
+}
+
+#[derive(Clone)]
+struct SimpleWriterSenders {
+    entities: Sender<RecordBatch>,
+    labels: Sender<RecordBatch>,
+    aliases: Sender<RecordBatch>,
+    descriptions: Sender<RecordBatch>,
+    datatypes: Sender<RecordBatch>,
+    sitelinks: Sender<RecordBatch>,
+    sitelink_badges: Sender<RecordBatch>,
+}
+
+macro_rules! define_simple_batch {
+    (
+        $name:ident {
+            new($batch_size:ident $(, $cap_param:ident : $cap_ty:ty)*);
+            $($field:ident : $builder_ty:ty = $init:expr, $val_ty:ty;)*
+        }
+    ) => {
+        struct $name {
+            tx: Sender<RecordBatch>,
+            schema: fn() -> SchemaRef,
+            $($field: $builder_ty,)*
+            count: usize,
+        }
+
+        impl $name {
+            fn new($batch_size: usize, $($cap_param: $cap_ty,)* tx: Sender<RecordBatch>, schema: fn() -> SchemaRef) -> Self {
+                Self {
+                    tx,
+                    schema,
+                    $($field: $init,)*
+                    count: 0,
+                }
+            }
+
+            fn append(&mut self, $($field: $val_ty),*) {
+                $(self.$field.append_value($field);)*
+                self.count += 1;
+            }
+
+            async fn flush(&mut self, min: usize) -> Result<()> {
+                if self.count >= min {
+                    let batch = make_batch(
+                        (self.schema)(),
+                        vec![$(Arc::new(self.$field.finish())),*],
+                    )?;
+                    self.count = 0;
+                    let _ = self.tx.send(batch).await;
+                }
+                Ok(())
+            }
+        }
+    };
+}
+
+define_simple_batch!(IntStrBatch {
+    new(batch_size, string_capacity: usize);
+    id: Int64Builder = Int64Builder::with_capacity(batch_size), i64;
+    value: StringBuilder = StringBuilder::with_capacity(batch_size, string_capacity), &str;
+});
+
+define_simple_batch!(IntStrStrBatch {
+    new(batch_size, left_capacity: usize, right_capacity: usize);
+    id: Int64Builder = Int64Builder::with_capacity(batch_size), i64;
+    left: StringBuilder = StringBuilder::with_capacity(batch_size, left_capacity), &str;
+    right: StringBuilder = StringBuilder::with_capacity(batch_size, right_capacity), &str;
+});
+
+define_simple_batch!(IntStrIntBatch {
+    new(batch_size, string_capacity: usize);
+    id: Int64Builder = Int64Builder::with_capacity(batch_size), i64;
+    text: StringBuilder = StringBuilder::with_capacity(batch_size, string_capacity), &str;
+    value: Int64Builder = Int64Builder::with_capacity(batch_size), i64;
+});
+
 struct SimpleBatchers {
     batch_size: usize,
-    // senders
-    entities_tx: Sender<RecordBatch>,
-    labels_tx: Sender<RecordBatch>,
-    aliases_tx: Sender<RecordBatch>,
-    descriptions_tx: Sender<RecordBatch>,
-    datatypes_tx: Sender<RecordBatch>,
-    sitelinks_tx: Sender<RecordBatch>,
-    sitelink_badges_tx: Sender<RecordBatch>,
-    // builders + counts
-    ent_id: Int64Builder,
-    ent_str: StringBuilder,
-    ent_count: usize,
-
-    lab_id: Int64Builder,
-    lab_lang: StringBuilder,
-    lab_val: StringBuilder,
-    lab_count: usize,
-
-    ali_id: Int64Builder,
-    ali_lang: StringBuilder,
-    ali_val: StringBuilder,
-    ali_count: usize,
-
-    des_id: Int64Builder,
-    des_lang: StringBuilder,
-    des_val: StringBuilder,
-    des_count: usize,
-
-    dt_id: Int64Builder,
-    dt_str: StringBuilder,
-    dt_count: usize,
-
-    sl_id: Int64Builder,
-    sl_site: StringBuilder,
-    sl_title: StringBuilder,
-    sl_count: usize,
-
-    slb_id: Int64Builder,
-    slb_site: StringBuilder,
-    slb_badge: Int64Builder,
-    slb_count: usize,
+    entities: IntStrBatch,
+    labels: IntStrStrBatch,
+    aliases: IntStrStrBatch,
+    descriptions: IntStrStrBatch,
+    datatypes: IntStrBatch,
+    sitelinks: IntStrStrBatch,
+    sitelink_badges: IntStrIntBatch,
 }
 
 impl SimpleBatchers {
-    fn new(
-        batch_size: usize,
-        entities_tx: Sender<RecordBatch>,
-        labels_tx: Sender<RecordBatch>,
-        aliases_tx: Sender<RecordBatch>,
-        descriptions_tx: Sender<RecordBatch>,
-        datatypes_tx: Sender<RecordBatch>,
-        sitelinks_tx: Sender<RecordBatch>,
-        sitelink_badges_tx: Sender<RecordBatch>,
-    ) -> Self {
+    fn new(batch_size: usize, senders: SimpleWriterSenders) -> Self {
         Self {
             batch_size,
-            entities_tx,
-            labels_tx,
-            aliases_tx,
-            descriptions_tx,
-            datatypes_tx,
-            sitelinks_tx,
-            sitelink_badges_tx,
-            ent_id: Int64Builder::with_capacity(batch_size),
-            ent_str: StringBuilder::with_capacity(batch_size, batch_size * 8),
-            ent_count: 0,
-            lab_id: Int64Builder::with_capacity(batch_size),
-            lab_lang: StringBuilder::with_capacity(batch_size, batch_size * 6),
-            lab_val: StringBuilder::with_capacity(batch_size, batch_size * 12),
-            lab_count: 0,
-            ali_id: Int64Builder::with_capacity(batch_size),
-            ali_lang: StringBuilder::with_capacity(batch_size, batch_size * 6),
-            ali_val: StringBuilder::with_capacity(batch_size, batch_size * 12),
-            ali_count: 0,
-            des_id: Int64Builder::with_capacity(batch_size),
-            des_lang: StringBuilder::with_capacity(batch_size, batch_size * 6),
-            des_val: StringBuilder::with_capacity(batch_size, batch_size * 12),
-            des_count: 0,
-            dt_id: Int64Builder::with_capacity(batch_size),
-            dt_str: StringBuilder::with_capacity(batch_size, batch_size * 6),
-            dt_count: 0,
-            sl_id: Int64Builder::with_capacity(batch_size),
-            sl_site: StringBuilder::with_capacity(batch_size, batch_size * 6),
-            sl_title: StringBuilder::with_capacity(batch_size, batch_size * 12),
-            sl_count: 0,
-            slb_id: Int64Builder::with_capacity(batch_size),
-            slb_site: StringBuilder::with_capacity(batch_size, batch_size * 6),
-            slb_badge: Int64Builder::with_capacity(batch_size),
-            slb_count: 0,
+            entities: IntStrBatch::new(
+                batch_size,
+                batch_size * 8,
+                senders.entities,
+                schema_entities,
+            ),
+            labels: IntStrStrBatch::new(
+                batch_size,
+                batch_size * 6,
+                batch_size * 12,
+                senders.labels,
+                schema_labels,
+            ),
+            aliases: IntStrStrBatch::new(
+                batch_size,
+                batch_size * 6,
+                batch_size * 12,
+                senders.aliases,
+                schema_aliases,
+            ),
+            descriptions: IntStrStrBatch::new(
+                batch_size,
+                batch_size * 6,
+                batch_size * 12,
+                senders.descriptions,
+                schema_descriptions,
+            ),
+            datatypes: IntStrBatch::new(
+                batch_size,
+                batch_size * 6,
+                senders.datatypes,
+                schema_datatypes,
+            ),
+            sitelinks: IntStrStrBatch::new(
+                batch_size,
+                batch_size * 6,
+                batch_size * 12,
+                senders.sitelinks,
+                schema_sitelinks,
+            ),
+            sitelink_badges: IntStrIntBatch::new(
+                batch_size,
+                batch_size * 6,
+                senders.sitelink_badges,
+                schema_sitelink_badges,
+            ),
         }
     }
 
-    fn entities_append(&mut self, id: i64, s: &str) {
-        self.ent_id.append_value(id);
-        self.ent_str.append_value(s);
-        self.ent_count += 1;
-    }
-
-    fn labels_append(&mut self, id: i64, lang: &str, val: &str) {
-        self.lab_id.append_value(id);
-        self.lab_lang.append_value(lang);
-        self.lab_val.append_value(val);
-        self.lab_count += 1;
-    }
-
-    fn aliases_append(&mut self, id: i64, lang: &str, val: &str) {
-        self.ali_id.append_value(id);
-        self.ali_lang.append_value(lang);
-        self.ali_val.append_value(val);
-        self.ali_count += 1;
-    }
-
-    fn descriptions_append(&mut self, id: i64, lang: &str, val: &str) {
-        self.des_id.append_value(id);
-        self.des_lang.append_value(lang);
-        self.des_val.append_value(val);
-        self.des_count += 1;
-    }
-
-    fn datatypes_append(&mut self, id: i64, dt: &str) {
-        self.dt_id.append_value(id);
-        self.dt_str.append_value(dt);
-        self.dt_count += 1;
-    }
-
-    fn sitelinks_append(&mut self, id: i64, site: &str, title: &str) {
-        self.sl_id.append_value(id);
-        self.sl_site.append_value(site);
-        self.sl_title.append_value(title);
-        self.sl_count += 1;
-    }
-
-    fn sitelink_badges_append(&mut self, id: i64, site: &str, badge: i64) {
-        self.slb_id.append_value(id);
-        self.slb_site.append_value(site);
-        self.slb_badge.append_value(badge);
-        self.slb_count += 1;
-    }
-
-    // Flush only if thresholds reached; invoked at end of each entity
-    async fn flush_if_needed_async(&mut self) -> Result<()> {
-        flush_simple_async!(
-            self,
-            self.ent_count >= self.batch_size,
-            ent_count,
-            schema_entities,
-            [ent_id, ent_str],
-            entities_tx
-        );
-        flush_simple_async!(
-            self,
-            self.lab_count >= self.batch_size,
-            lab_count,
-            schema_labels,
-            [lab_id, lab_lang, lab_val],
-            labels_tx
-        );
-        flush_simple_async!(
-            self,
-            self.ali_count >= self.batch_size,
-            ali_count,
-            schema_aliases,
-            [ali_id, ali_lang, ali_val],
-            aliases_tx
-        );
-        flush_simple_async!(
-            self,
-            self.des_count >= self.batch_size,
-            des_count,
-            schema_descriptions,
-            [des_id, des_lang, des_val],
-            descriptions_tx
-        );
-        flush_simple_async!(
-            self,
-            self.dt_count >= self.batch_size,
-            dt_count,
-            schema_datatypes,
-            [dt_id, dt_str],
-            datatypes_tx
-        );
-        flush_simple_async!(
-            self,
-            self.sl_count >= self.batch_size,
-            sl_count,
-            schema_sitelinks,
-            [sl_id, sl_site, sl_title],
-            sitelinks_tx
-        );
-        flush_simple_async!(
-            self,
-            self.slb_count >= self.batch_size,
-            slb_count,
-            schema_sitelink_badges,
-            [slb_id, slb_site, slb_badge],
-            sitelink_badges_tx
-        );
-        Ok(())
-    }
-
-    async fn flush_all_async(&mut self) -> Result<()> {
-        flush_simple_async!(
-            self,
-            self.ent_count > 0,
-            ent_count,
-            schema_entities,
-            [ent_id, ent_str],
-            entities_tx
-        );
-        flush_simple_async!(
-            self,
-            self.lab_count > 0,
-            lab_count,
-            schema_labels,
-            [lab_id, lab_lang, lab_val],
-            labels_tx
-        );
-        flush_simple_async!(
-            self,
-            self.ali_count > 0,
-            ali_count,
-            schema_aliases,
-            [ali_id, ali_lang, ali_val],
-            aliases_tx
-        );
-        flush_simple_async!(
-            self,
-            self.des_count > 0,
-            des_count,
-            schema_descriptions,
-            [des_id, des_lang, des_val],
-            descriptions_tx
-        );
-        flush_simple_async!(
-            self,
-            self.dt_count > 0,
-            dt_count,
-            schema_datatypes,
-            [dt_id, dt_str],
-            datatypes_tx
-        );
-        flush_simple_async!(
-            self,
-            self.sl_count > 0,
-            sl_count,
-            schema_sitelinks,
-            [sl_id, sl_site, sl_title],
-            sitelinks_tx
-        );
-        flush_simple_async!(
-            self,
-            self.slb_count > 0,
-            slb_count,
-            schema_sitelink_badges,
-            [slb_id, slb_site, slb_badge],
-            sitelink_badges_tx
-        );
-        Ok(())
-    }
-}
-
-// Per-key claim buffering: accumulate builders and only flush when checked
-struct ClaimBatchHolder {
-    key: ClaimKey,
-    batch_size: usize,
-    current: ClaimBatchBuilders,
-}
-
-impl ClaimBatchHolder {
-    fn new(key: &ClaimKey, batch_size: usize) -> Self {
-        Self {
-            key: key.clone(),
-            batch_size,
-            current: ClaimBatchBuilders::new(key),
-        }
-    }
-
-    fn append(&mut self, row: Row) {
-        self.current.append(row);
-    }
-
-    async fn flush_if_needed_send(&mut self, writers: &ClaimWriters) -> Result<()> {
-        if self.current.len() >= self.batch_size {
-            let batch = self.current.finish_to_batch(&self.key)?;
-            writers
-                .send(ClaimBatchEvent {
-                    key: self.key.clone(),
-                    batch,
-                })
-                .await?;
-        }
-        Ok(())
-    }
-
-    async fn finalize_and_send_all(self, writers: &ClaimWriters) -> Result<()> {
-        let this = self;
-        // send remaining partial if any
-        if !this.current.is_empty() {
-            let mut cur = this.current;
-            let batch = cur.finish_to_batch(&this.key)?;
-            writers
-                .send(ClaimBatchEvent {
-                    key: this.key.clone(),
-                    batch,
-                })
-                .await?;
-        }
+    async fn flush_async(&mut self, force: bool) -> Result<()> {
+        let min = if force { 1 } else { self.batch_size };
+        self.entities.flush(min).await?;
+        self.labels.flush(min).await?;
+        self.aliases.flush(min).await?;
+        self.descriptions.flush(min).await?;
+        self.datatypes.flush(min).await?;
+        self.sitelinks.flush(min).await?;
+        self.sitelink_badges.flush(min).await?;
         Ok(())
     }
 }
 
 impl ClaimWriters {
-    fn new(base_dir: PathBuf, batch_size: usize) -> Self {
+    fn new(base_dir: PathBuf) -> Self {
         Self(Arc::new(Mutex::new(ClaimWritersInner {
             base_dir,
-            batch_size,
             senders: HashMap::new(),
             handles: Vec::new(),
         })))
     }
 
-    async fn send(&self, ev: ClaimBatchEvent) -> Result<()> {
+    async fn send(&self, key: ClaimKey, batch: RecordBatch) -> Result<()> {
         let mut inner = self.0.lock().await;
-        let tx = if let Some(tx) = inner.senders.get(&ev.key) {
+        let tx = if let Some(tx) = inner.senders.get(&key) {
             tx.clone()
         } else {
             let (tx_new, rx_new) = mpsc::channel::<RecordBatch>(READY_BATCHES_BUFFER);
             let base = inner.base_dir.clone();
-            let key = ev.key.clone();
-            let h = task::spawn(run_claim_writer(
-                base,
-                key.clone(),
-                rx_new,
-                inner.batch_size,
-            ));
+            let h = task::spawn(run_claim_writer(base, key.clone(), rx_new));
             inner.handles.push(h);
-            inner.senders.insert(key.clone(), tx_new.clone());
+            inner.senders.insert(key, tx_new.clone());
             tx_new
         };
         drop(inner);
-        let _ = tx.send(ev.batch).await;
+        let _ = tx.send(batch).await;
         Ok(())
     }
 
@@ -1835,75 +1491,51 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     fs::create_dir_all(args.output.join("tmp"))?;
 
-    // Async writer actor setup
     let base_simple_dir = args.output.join("tmp");
-
-    // capacities sized to absorb bursts but apply backpressure under sustained load
-    let (entities_tx, entities_rx) = mpsc::channel::<RecordBatch>(READY_BATCHES_BUFFER);
-    let (labels_tx, labels_rx) = mpsc::channel::<RecordBatch>(READY_BATCHES_BUFFER);
-    let (aliases_tx, aliases_rx) = mpsc::channel::<RecordBatch>(READY_BATCHES_BUFFER);
-    let (descriptions_tx, descriptions_rx) = mpsc::channel::<RecordBatch>(READY_BATCHES_BUFFER);
-    let (datatypes_tx, datatypes_rx) = mpsc::channel::<RecordBatch>(READY_BATCHES_BUFFER);
-    let (sitelinks_tx, sitelinks_rx) = mpsc::channel::<RecordBatch>(READY_BATCHES_BUFFER);
-    let (sitelink_badges_tx, sitelink_badges_rx) =
-        mpsc::channel::<RecordBatch>(READY_BATCHES_BUFFER);
-
     let mut writer_tasks: Vec<JoinHandle<Result<()>>> = Vec::new();
-    spawn_simple_writer(
-        &mut writer_tasks,
-        &base_simple_dir,
-        "entities",
-        entities_rx,
-        schema_entities(),
-    );
-    spawn_simple_writer(
-        &mut writer_tasks,
-        &base_simple_dir,
-        "labels",
-        labels_rx,
-        schema_labels(),
-    );
-    spawn_simple_writer(
-        &mut writer_tasks,
-        &base_simple_dir,
-        "aliases",
-        aliases_rx,
-        schema_aliases(),
-    );
-    spawn_simple_writer(
-        &mut writer_tasks,
-        &base_simple_dir,
-        "descriptions",
-        descriptions_rx,
-        schema_descriptions(),
-    );
-    spawn_simple_writer(
-        &mut writer_tasks,
-        &base_simple_dir,
-        "datatypes",
-        datatypes_rx,
-        schema_datatypes(),
-    );
-    spawn_simple_writer(
-        &mut writer_tasks,
-        &base_simple_dir,
-        "sitelinks",
-        sitelinks_rx,
-        schema_sitelinks(),
-    );
-    spawn_simple_writer(
-        &mut writer_tasks,
-        &base_simple_dir,
-        "sitelink_badges",
-        sitelink_badges_rx,
-        schema_sitelink_badges(),
-    );
-
-    // Reader task (blocking) will be spawned after worker channels are created
+    let simple_senders = SimpleWriterSenders {
+        entities: make_simple_writer(
+            &mut writer_tasks,
+            &base_simple_dir,
+            "entities",
+            schema_entities,
+        ),
+        labels: make_simple_writer(&mut writer_tasks, &base_simple_dir, "labels", schema_labels),
+        aliases: make_simple_writer(
+            &mut writer_tasks,
+            &base_simple_dir,
+            "aliases",
+            schema_aliases,
+        ),
+        descriptions: make_simple_writer(
+            &mut writer_tasks,
+            &base_simple_dir,
+            "descriptions",
+            schema_descriptions,
+        ),
+        datatypes: make_simple_writer(
+            &mut writer_tasks,
+            &base_simple_dir,
+            "datatypes",
+            schema_datatypes,
+        ),
+        sitelinks: make_simple_writer(
+            &mut writer_tasks,
+            &base_simple_dir,
+            "sitelinks",
+            schema_sitelinks,
+        ),
+        sitelink_badges: make_simple_writer(
+            &mut writer_tasks,
+            &base_simple_dir,
+            "sitelink_badges",
+            schema_sitelink_badges,
+        ),
+    };
 
     // Shared interner and claim writers
     let interner = Arc::new(Interner::new());
-    let claim_writers = ClaimWriters::new(args.output.join("tmp"), args.batch_size);
+    let claim_writers = ClaimWriters::new(args.output.join("tmp"));
     let claim_ids = Arc::new(ClaimIdGen::new());
 
     // Create worker channels
@@ -1919,49 +1551,23 @@ async fn main() -> Result<()> {
         let (tx, mut rx) =
             mpsc::channel::<String>(LINE_CHANNEL_CAPACITY / number_of_entity_parser_threads.max(1));
         entity_parser_txs.push(tx);
-        // Clone resources for worker
-        let entities_tx_c = entities_tx.clone();
-        let labels_tx_c = labels_tx.clone();
-        let aliases_tx_c = aliases_tx.clone();
-        let descriptions_tx_c = descriptions_tx.clone();
-        let datatypes_tx_c = datatypes_tx.clone();
-        let sitelinks_tx_c = sitelinks_tx.clone();
-        let sitelink_badges_tx_c = sitelink_badges_tx.clone();
+        let senders_c = simple_senders.clone();
         let interner_c = interner.clone();
         let claim_writers_c = claim_writers.clone();
         let claim_ids_c = claim_ids.clone();
         let batch_size = args.batch_size;
         let h = task::spawn(async move {
-            // Per-worker batchers and builders
-            let mut simple = SimpleBatchers::new(
+            let mut worker = WorkerState::new(
                 batch_size,
-                entities_tx_c,
-                labels_tx_c,
-                aliases_tx_c,
-                descriptions_tx_c,
-                datatypes_tx_c,
-                sitelinks_tx_c,
-                sitelink_badges_tx_c,
+                senders_c,
+                interner_c,
+                claim_writers_c,
+                claim_ids_c,
             );
-            let mut claim_builders: HashMap<ClaimKey, ClaimBatchHolder> = HashMap::new();
             while let Some(line) = rx.recv().await {
-                process_entity(
-                    &line,
-                    &interner_c,
-                    &mut simple,
-                    &mut claim_builders,
-                    &claim_writers_c,
-                    batch_size,
-                    &claim_ids_c,
-                )
-                .await?;
+                worker.process_entity(&line).await?;
             }
-            // Flush remaining claim batches
-            for (_key, entry) in claim_builders.into_iter() {
-                entry.finalize_and_send_all(&claim_writers_c).await?;
-            }
-            // Flush simple batchers
-            simple.flush_all_async().await?;
+            worker.finish().await?;
             Ok::<_, anyhow::Error>(())
         });
         entity_parser_threads.push(h);
@@ -2025,13 +1631,7 @@ async fn main() -> Result<()> {
     }
 
     // Drop senders to finish writer tasks cleanly
-    drop(entities_tx);
-    drop(labels_tx);
-    drop(aliases_tx);
-    drop(descriptions_tx);
-    drop(datatypes_tx);
-    drop(sitelinks_tx);
-    drop(sitelink_badges_tx);
+    drop(simple_senders);
     // Close claim writers and wait for them
     claim_writers.close().await?;
 
@@ -2046,15 +1646,6 @@ async fn main() -> Result<()> {
 }
 
 async fn finalize_output_parallel(out_root: &Path, max_file_size: u64) -> Result<()> {
-    let datasets = vec![
-        "entities",
-        "labels",
-        "aliases",
-        "descriptions",
-        "datatypes",
-        "sitelinks",
-        "sitelink_badges",
-    ];
     let tmp_root = out_root.join("tmp");
     let tmp2_root = out_root.join("tmp2");
     fs::create_dir_all(&tmp2_root).ok();
@@ -2081,8 +1672,38 @@ async fn finalize_output_parallel(out_root: &Path, max_file_size: u64) -> Result
         Ok(parts)
     }
 
+    fn run_duckdb_copy(scan: &str, out_dir: &Path, max_file_size: u64) -> Result<()> {
+        use duckdb::Connection;
+        fs::create_dir_all(out_dir).ok();
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "SET enable_progress_bar_print=TRUE; SET progress_bar_time=0; SET threads=1;",
+        )?;
+        let sql = format!(
+            "COPY (SELECT * FROM parquet_scan('{}')) TO '{}' (FORMAT 'parquet', COMPRESSION 'zstd', COMPRESSION_LEVEL 22, STRING_DICTIONARY_PAGE_SIZE_LIMIT 100_000, FILE_SIZE_BYTES {})",
+            scan,
+            out_dir.display(),
+            max_file_size
+        );
+        conn.execute_batch(&sql)?;
+        Ok(())
+    }
+
+    fn move_parts(dir: &Path, mut dest_for_index: impl FnMut(i64) -> PathBuf) -> Result<()> {
+        for (index, file) in collect_duckdb_parts(dir)? {
+            fs::rename(&file, dest_for_index(index))?;
+        }
+        Ok(())
+    }
+
+    fn is_claim_dir(name: &str) -> bool {
+        name.starts_with("claim_")
+            || name.starts_with("qualifier_")
+            || name.starts_with("reference_")
+    }
+
     // Simple dataset files -> one blocking task each
-    for name in datasets {
+    for name in SIMPLE_DATASETS {
         let in_path = out_root.join(format!("tmp/{}.parquet", name));
         if !in_path.exists() {
             continue;
@@ -2090,36 +1711,22 @@ async fn finalize_output_parallel(out_root: &Path, max_file_size: u64) -> Result
         let mid_dir = out_root.join(format!("tmp2/{}", name));
         let out_single = out_root.join(format!("{}.parquet", name));
         let h = task::spawn_blocking(move || -> Result<()> {
-            use duckdb::Connection;
-            fs::create_dir_all(&mid_dir).ok();
-            let conn = Connection::open_in_memory()?;
-            conn.execute_batch(
-                "SET enable_progress_bar_print=TRUE; SET progress_bar_time=0; SET threads=1;",
-            )?;
-            let sql = format!(
-                "COPY (SELECT * FROM parquet_scan('{}')) TO '{}' (FORMAT 'parquet', COMPRESSION 'zstd', COMPRESSION_LEVEL 22, STRING_DICTIONARY_PAGE_SIZE_LIMIT 100_000, FILE_SIZE_BYTES {})",
-                in_path.display(),
-                mid_dir.display(),
-                max_file_size
-            );
-            conn.execute_batch(&sql)?;
+            run_duckdb_copy(&in_path.display().to_string(), &mid_dir, max_file_size)?;
             let _ = fs::remove_file(&in_path);
-            let parts = collect_duckdb_parts(&mid_dir)?;
-            for (i, f) in parts {
-                let suffix = if i == 0 {
+            move_parts(&mid_dir, |index| {
+                let suffix = if index == 0 {
                     String::new()
                 } else {
-                    format!("_{}", i)
+                    format!("_{}", index)
                 };
-                let dest = out_single
+                out_single
                     .with_file_name(format!(
                         "{}{}",
                         out_single.file_stem().unwrap().to_string_lossy(),
                         suffix
                     ))
-                    .with_extension("parquet");
-                fs::rename(&f, &dest)?;
-            }
+                    .with_extension("parquet")
+            })?;
             let _ = fs::remove_dir_all(&mid_dir);
             Ok(())
         });
@@ -2127,50 +1734,31 @@ async fn finalize_output_parallel(out_root: &Path, max_file_size: u64) -> Result
     }
 
     // claim/qual/reference directories
-    let mut claim_dirs: Vec<String> = Vec::new();
-    if tmp_root.exists() {
-        for entry in fs::read_dir(&tmp_root)? {
-            let p = entry?.path();
-            if let Some(dname) = p.file_name().and_then(|s| s.to_str()) {
-                if dname.starts_with("claim_")
-                    || dname.starts_with("qualifier_")
-                    || dname.starts_with("reference_")
-                {
-                    claim_dirs.push(dname.to_string());
-                }
-            }
-        }
-    }
+    let claim_dirs: Vec<String> = if tmp_root.exists() {
+        fs::read_dir(&tmp_root)?
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|name| is_claim_dir(name))
+            .collect()
+    } else {
+        Vec::new()
+    };
     for dname in claim_dirs {
         let tmp_root_c = tmp_root.clone();
         let out_root_c = out_root.to_path_buf();
         let dname_c = dname.clone();
         let h = task::spawn_blocking(move || -> Result<()> {
-            use duckdb::Connection;
             let glob = format!("{}/{}/*/*/*.parquet", tmp_root_c.display(), dname_c);
             let mid_dir = out_root_c.join(format!("tmp2/{}", dname_c));
-            fs::create_dir_all(&mid_dir).ok();
-            let conn = Connection::open_in_memory()?;
-            conn.execute_batch(
-                "SET enable_progress_bar_print=TRUE; SET progress_bar_time=0; SET threads=1;",
-            )?;
-            let sql = format!(
-                "COPY (SELECT * FROM parquet_scan('{}')) TO '{}' (FORMAT 'parquet', COMPRESSION 'zstd', COMPRESSION_LEVEL 22, STRING_DICTIONARY_PAGE_SIZE_LIMIT 100_000, FILE_SIZE_BYTES {})",
-                glob,
-                mid_dir.display(),
-                max_file_size
-            );
-            conn.execute_batch(&sql)?;
+            run_duckdb_copy(&glob, &mid_dir, max_file_size)?;
             let _ = fs::remove_dir_all(out_root_c.join(format!("tmp/{}", dname_c)));
-            let parts = collect_duckdb_parts(&mid_dir)?;
-            for (i, f) in parts {
-                let dest = if i == 0 {
+            move_parts(&mid_dir, |index| {
+                if index == 0 {
                     out_root_c.join(format!("{}.parquet", dname_c))
                 } else {
-                    out_root_c.join(format!("{}_{}.parquet", dname_c, i))
-                };
-                fs::rename(&f, &dest)?;
-            }
+                    out_root_c.join(format!("{}_{}.parquet", dname_c, index))
+                }
+            })?;
             let _ = fs::remove_dir_all(&mid_dir);
             Ok(())
         });
