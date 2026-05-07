@@ -9,28 +9,11 @@ collection_info |>
   rowwise() |>
   group_walk(\(row, ...) {
     t <- box::topenv()
-    if (row$dataset == "wikidata") {
-      list.files(here::here("data/wikidata/"), pattern=".*\\.parquet") |> 
-        str_replace("(_[0-9])*\\.parquet","") |> 
-        unique() |>
-        purrr::walk(\(name) t[[str_c('wd_',name)]] <- tbl(con, glue::glue("read_parquet('{here::here('data/wikidata')}/{name}*.parquet')")))
-      NULL
-    } else if (row$dataset == "isni") {
-      list.files(here::here("data/isni/"), pattern=".*\\.parquet") |> 
-        str_replace("(_[0-9])*\\.parquet","") |> 
-        unique() |>
-        purrr::walk(\(name) t[[str_c('isni_',name)]] <- tbl(con, glue::glue("read_parquet('{here::here('data/isni')}/{name}*.parquet')")))
-    } else if (row$dataset == "geonames") {
-      t[["geonames"]] <- tbl(con, glue::glue("read_parquet('{here::here('data')}/geonames/geonames*.parquet')"))
-      t[["geonames_alternate_names"]] <- tbl(con, glue::glue("read_parquet('{here::here('data')}/geonames/alternate_names*.parquet')"))
-    } else if (row$standard == "rdf") {
-      ds <- tbl(con, glue::glue("read_parquet('{here::here('data')}/{row$dataset}/{row$dataset}*.parquet')")) |>
-        relocate(subject, property, object)
-      t[[row$dataset]] <- ds
-    } else if (row$standard %in% c("intermarc", "marc21", "unimarc", "pica", "istc", "danmarc", "ctmarc")) {
-      ds <- tbl(con, glue::glue("read_parquet('{here::here('data')}/{row$dataset}/{row$dataset}*.parquet')"))
-      t[[row$dataset]] <- ds
-    } else {
-      stop("Unknown dataset type ", row)
-    }
+    files <- list.files(here::here(str_c("data/", row$dataset)), pattern="\\.parquet$", full.names=TRUE)
+    table_names <- str_replace(basename(files), "_\\d+\\.parquet$", "") |> str_replace("\\.parquet$", "")
+    groups <- split(files, table_names)
+    purrr::iwalk(groups, \(file_list, name) {
+      files_sql <- str_c("[", str_c("'", file_list, "'", collapse=", "), "]")
+      t[[name]] <- tbl(con, glue::glue("read_parquet({files_sql})"))
+    })
   })

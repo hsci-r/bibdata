@@ -12,3 +12,4 @@ __pycache__/
 data/work
 data/estc/estc*.parquet
 data/stcn/stcn*.parquet
+.positai

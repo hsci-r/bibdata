@@ -25,7 +25,10 @@ def wikidata_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
     process_processors = max(1, processors - lbzcat_processors)
     log_and_run(f"sh -c 'lbzcat -n {lbzcat_processors} {input_file} | pv -r -a -m 3600 -s 118704633 -p -b -l -e -t -v -f | target/release/process-wikidata -b 8192 -t {process_processors} -o {work_dir}'", context)
     for file in glob(os.path.join(work_dir, "*.parquet")):
-        shutil.move(file, parquet_dir)
+        basename = os.path.basename(file).replace("-", "_")
+        if not basename.startswith("wd_"):
+            basename = "wd_" + basename
+        shutil.move(file, os.path.join(parquet_dir, basename))
     return get_parquet_glob_sha1sum(os.path.join(parquet_dir, "*.parquet"))
 
 @dg.asset(deps=[wikidata_parquet], pool="overview")

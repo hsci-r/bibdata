@@ -23,6 +23,7 @@ dependencies = [
     "pyspark>=4.1.1",
     "requests>=2.32.3",
     "s3fs>=2025.5.1",
+    "sentence-transformers>=5.4.1",
     "sqlglot>=28.1.0",
     "tqdm>=4.67.1",
 ]

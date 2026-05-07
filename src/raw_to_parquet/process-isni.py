@@ -82,12 +82,12 @@ def convert_isni(input: list[str], prefixes: str, output: str, max_file_size: in
     pbar = tqdm(total=tsize, unit='b', smoothing=0, unit_scale=True, unit_divisor=1024, dynamic_ncols=True)
     processed_files_tsize = 0
     os.makedirs(f"{output}.tmp", exist_ok=True)
-    with pq.ParquetWriter(f"{output}.tmp/core.parquet", core, compression='zstd') as core_writer, \
-         pq.ParquetWriter(f"{output}.tmp/names.parquet", names, compression='zstd') as names_writer, \
-         pq.ParquetWriter(f"{output}.tmp/deprecated_isnis.parquet", deprecated_isnis, compression='zstd') as deprecated_isnis_writer, \
-         pq.ParquetWriter(f"{output}.tmp/same_as.parquet", same_as, compression='zstd') as same_as_writer, \
-         pq.ParquetWriter(f"{output}.tmp/authority_ids.parquet", authority_ids, compression='zstd') as authority_ids_writer, \
-         pq.ParquetWriter(f"{output}.tmp/source_ids.parquet", source_ids, compression='zstd') as source_ids_writer:
+    with pq.ParquetWriter(f"{output}.tmp/isni_core.parquet", core, compression='zstd') as core_writer, \
+         pq.ParquetWriter(f"{output}.tmp/isni_names.parquet", names, compression='zstd') as names_writer, \
+         pq.ParquetWriter(f"{output}.tmp/isni_deprecated_isnis.parquet", deprecated_isnis, compression='zstd') as deprecated_isnis_writer, \
+         pq.ParquetWriter(f"{output}.tmp/isni_same_as.parquet", same_as, compression='zstd') as same_as_writer, \
+         pq.ParquetWriter(f"{output}.tmp/isni_authority_ids.parquet", authority_ids, compression='zstd') as authority_ids_writer, \
+         pq.ParquetWriter(f"{output}.tmp/isni_source_ids.parquet", source_ids, compression='zstd') as source_ids_writer:
         core_batch = []
         names_batch = []
         deprecated_isnis_batch = []
@@ -169,7 +169,7 @@ def convert_isni(input: list[str], prefixes: str, output: str, max_file_size: in
     duckdb.query("SET threads=1")
     print("Coalescing and optimising into unified parquet(s):")
     os.makedirs(f"{output}", exist_ok=True)
-    for part in ['core', 'names', 'deprecated_isnis', 'same_as', 'authority_ids', 'source_ids']:
+    for part in ['isni_core', 'isni_names', 'isni_deprecated_isnis', 'isni_same_as', 'isni_authority_ids', 'isni_source_ids']:
         print(f"Processing {part}")
         os.makedirs(f"{output}.tmp.2/{part}", exist_ok=True)
         duckdb.query(f"COPY (SELECT * FROM parquet_scan('{output}.tmp/{part}.parquet')) TO '{output}.tmp.2/{part}' (FORMAT 'parquet', COMPRESSION 'zstd', COMPRESSION_LEVEL 22, STRING_DICTIONARY_PAGE_SIZE_LIMIT 100_000, FILE_SIZE_BYTES {max_file_size})")

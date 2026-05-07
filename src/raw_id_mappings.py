@@ -1,6 +1,7 @@
 #%%
 from core import *
 
-e_id = read_parquet('e_id', here("data/work/raw_id_mappings/e_id.parquet"))
+e_id_files = sorted(here("data/unified").glob("e_id*.parquet"))
+e_id = read_parquet('e_id', *e_id_files)
 
 __all__ = ["e_id"]

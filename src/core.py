@@ -18,8 +18,12 @@ def to_narwhals(duckdb_relation: duckdb.DuckDBPyRelation) -> nw.LazyFrame[duckdb
 def to_duckdb(lnf: nw.LazyFrame[duckdb.DuckDBPyRelation]) -> duckdb.DuckDBPyRelation:
     return lnf.to_native()
 
-def read_parquet(table_name: str, glob: Path) -> nw.LazyFrame[duckdb.DuckDBPyRelation]:
-    con.sql(f"CREATE OR REPLACE VIEW {table_name} AS SELECT * FROM read_parquet('{glob}');")
+def read_parquet(table_name: str, *paths: Path) -> nw.LazyFrame[duckdb.DuckDBPyRelation]:
+    if len(paths) == 1:
+        files_sql = f"'{paths[0]}'"
+    else:
+        files_sql = "[" + ", ".join(f"'{p}'" for p in paths) + "]"
+    con.sql(f"CREATE OR REPLACE VIEW {table_name} AS SELECT * FROM read_parquet({files_sql});")
     return to_narwhals(con.view(table_name))
 
 def to_table(table_name: str, lnf: nw.LazyFrame[duckdb.DuckDBPyRelation], temporary: bool = False, replace: bool = True) -> nw.LazyFrame[duckdb.DuckDBPyRelation]:

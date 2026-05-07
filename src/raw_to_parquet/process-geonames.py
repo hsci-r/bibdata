@@ -123,7 +123,7 @@ def process_geonames():
         pw.write_batch(pa.record_batch(list(zip(*batch)), schema=schema), row_group_size=1024*1024)
     duckdb.query(f"COPY 'data/geonames/geonames.tmp.parquet' TO 'data/geonames/geonames.parquet' (FORMAT 'parquet', COMPRESSION 'zstd', COMPRESSION_LEVEL 22)")
     os.remove('data/geonames/geonames.tmp.parquet')
-    with fsspec.open('zip://alternateNamesV2.txt::data/work/geonames/alternateNamesV2.zip', 'rt') as file, pq.ParquetWriter("data/geonames/alternate_names.tmp.parquet", schema=alternate_names_schema, compression="zstd") as pw:
+    with fsspec.open('zip://alternateNamesV2.txt::data/work/geonames/alternateNamesV2.zip', 'rt') as file, pq.ParquetWriter("data/geonames/geonames_alternate_names.tmp.parquet", schema=alternate_names_schema, compression="zstd") as pw:
         batch = []
         r = csv.reader(file, delimiter='\t')
         for row in tqdm(r):
@@ -140,8 +140,8 @@ def process_geonames():
                 int(row[9]) if row[9].isdigit() else None,  # to
             ))
         pw.write_batch(pa.record_batch(list(zip(*batch)), schema=alternate_names_schema), row_group_size=1024*1024)
-    duckdb.query(f"COPY 'data/geonames/alternate_names.tmp.parquet' TO 'data/geonames/alternate_names.parquet' (FORMAT 'parquet', COMPRESSION 'zstd', COMPRESSION_LEVEL 22)")
-    os.remove('data/geonames/alternate_names.tmp.parquet')
+    duckdb.query(f"COPY 'data/geonames/geonames_alternate_names.tmp.parquet' TO 'data/geonames/geonames_alternate_names.parquet' (FORMAT 'parquet', COMPRESSION 'zstd', COMPRESSION_LEVEL 22)")
+    os.remove('data/geonames/geonames_alternate_names.tmp.parquet')
 
 if __name__ == "__main__":
     process_geonames()
