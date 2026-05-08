@@ -5,7 +5,7 @@ Included:
    * [Dutch National Library](https://hsci-r.github.io/bibdata/kbnl/kbnl-overview.html)
    * [The English Short Title Catalogue](https://hsci-r.github.io/bibdata/estc/estc-overview.html)
    * [The Estonian National Bibliography](https://hsci-r.github.io/bibdata/erb/erb-overview.html)
-   * [The Bibliography of the Hand Press Books in Flanders](https://hsci-r.github.io/bibdata/stcv/stcv-overview.html)      * 
+   * [The Bibliography of the Hand Press Books in Flanders](https://hsci-r.github.io/bibdata/stcv/stcv-overview.html)
    * [The Finnish National Library Database Melinda](https://hsci-r.github.io/bibdata/melinda/melinda-overview.html)
    * [The Finnish National Bibliography Fennica](https://hsci-r.github.io/bibdata/fennica/fennica-overview.html)
    * [The French National Bibliography (BNF)](https://hsci-r.github.io/bibdata/bnf/bnf-overview.html)
