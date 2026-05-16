@@ -393,7 +393,7 @@ requires-dist = [
     { name = "bib2", specifier = ">=1.5.4" },
     { name = "chdb", specifier = ">=4.0.0" },
     { name = "click", specifier = ">=8.1" },
-    { name = "dagster", specifier = ">=1.10.14" },
+    { name = "dagster", specifier = ">=1.13.1" },
     { name = "fsspec", specifier = ">=2025.5.1" },
     { name = "hereutil", specifier = ">=0.1.5" },
     { name = "humanize", specifier = ">=4.12.3" },
