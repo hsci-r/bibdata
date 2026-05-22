@@ -29,8 +29,10 @@ from dagster_assets.defs.dbnf import dbnf_overview
 from dagster_assets.defs.isni import isni_overview
 from dagster_assets.defs.wikidata import wikidata_overview
 from dagster_assets.defs.geonames import geonames_overview
+from dagster_assets.defs.gvk import gvk_overview
+from dagster_assets.defs.vd16 import vd16_overview
 
-@dg.asset(deps=[isni_overview, wikidata_overview, geonames_overview, idloc_overview, ulan_overview, tgn_overview, melinda_overview, dbnf_overview, estc_overview, cnb_overview, stcn_overview, stcv_overview, dnb_overview, erb_overview, gnd_overview, fennica_overview, hpb_overview, istc_overview, plnb_overview, ptnb_overview, vd17_overview, vd18_overview, viaf_overview, bnf_overview, kbnl_overview, kbse_overview, natdk_overview, natno_overview])
+@dg.asset(deps=[isni_overview, wikidata_overview, geonames_overview, idloc_overview, ulan_overview, tgn_overview, melinda_overview, dbnf_overview, estc_overview, cnb_overview, stcn_overview, stcv_overview, dnb_overview, erb_overview, gnd_overview, fennica_overview, hpb_overview, istc_overview, plnb_overview, ptnb_overview, vd17_overview, vd18_overview, viaf_overview, bnf_overview, kbnl_overview, kbse_overview, natdk_overview, natno_overview, gvk_overview, vd16_overview])
 def index(context: dg.AssetExecutionContext):
     cmd = "python src/raw_overview/create-index.py"
     log_and_run(cmd, context)
