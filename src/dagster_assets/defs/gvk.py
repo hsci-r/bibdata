@@ -4,16 +4,16 @@ from dagster_assets.utils import get_date_from_file_modification_time, log_and_r
 work_dir = "data/work/gvk"
 parquet_file = "data/gvk/gvk.parquet"
 
-@dg.asset(pool="download")
+@dg.asset(pool="download", backfill_policy=dg.BackfillPolicy.multi_run(1), partitions_def=dg.StaticPartitionsDefinition(list(str(i)+str(j) for i in range(10) for j in range(10))))
 def gvk_crawl(context: dg.AssetExecutionContext):
     cmd = (
         "python src/raw_procure/crawl-sru.py "
         "-v 2.0 "
         "-e https://sru.k10plus.de/gvk "
         f"-o {work_dir} "
-        "-i gvk "
         "-r picaxml "
-        "-q 'pica.ppn=0* or pica.ppn=1* or pica.ppn=2* or pica.ppn=3* or pica.ppn=4* or pica.ppn=5* or pica.ppn=6* or pica.ppn=7* or pica.ppn=8* or pica.ppn=9*'"
+        f"-i gvk_{context.partition_key} "
+        f"-q 'pica.ppn={context.partition_key}*'"
     )
     log_and_run(cmd, context)
 
