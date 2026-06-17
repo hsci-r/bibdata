@@ -16,7 +16,7 @@ def ptnb_download(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
 
 @dg.asset(deps=[ptnb_download], pool="parquet")
 def ptnb_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
-    return run_bibxml2(context, parquet_file, f"zip://*::{work_file}", 'marc', no_input_glob=True)
+    return run_bibxml2(context, parquet_file, f"zip://*::{work_file}", 'marc')
     
 
 @dg.asset(deps=[ptnb_parquet], pool="overview")

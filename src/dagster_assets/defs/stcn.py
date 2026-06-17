@@ -12,7 +12,7 @@ def stcn_download() -> dg.MaterializeResult:
 
 @dg.asset(deps=[stcn_download], pool="parquet")
 def stcn_parquet(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
-    return run_bibxml2(context, parquet_file, f"zip://*::{work_file}", 'pica', no_input_glob=True)
+    return run_bibxml2(context, parquet_file, f"zip://*::{work_file}", 'pica')
 
 
 @dg.asset(deps=[stcn_parquet], pool="overview")

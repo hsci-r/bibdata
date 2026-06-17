@@ -4,7 +4,7 @@ from dagster_assets.utils import get_date_from_file_modification_time, log_and_r
 work_dir = "data/work/gvk"
 parquet_file = "data/gvk/gvk.parquet"
 
-@dg.asset(pool="download", backfill_policy=dg.BackfillPolicy.multi_run(1), partitions_def=dg.StaticPartitionsDefinition(list(str(i)+str(j) for i in range(10) for j in range(10))))
+@dg.asset(pool="download", backfill_policy=dg.BackfillPolicy.multi_run(1), partitions_def=dg.StaticPartitionsDefinition(list("165"+str(i) for i in range(10)) + list(str(i)+str(j)+str(k) for i in range(10) for j in range(10) for k in range(10) if not (i == 1 and j == 6 and k == 5))))
 def gvk_crawl(context: dg.AssetExecutionContext):
     cmd = (
         "python src/raw_procure/crawl-sru.py "
